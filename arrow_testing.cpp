@@ -6,10 +6,11 @@
 #include <parquet/arrow/reader.h>
 #include <parquet/arrow/writer.h>
 #include <arrow/compute/api.h>
+//#include <arrow/array/array_primitive.h>
 
 #include <unistd.h>
 #include <iostream>
-
+#include <vector>
 
 arrow::Status GenInitialFile(){
     //create arrow array from c++ array
@@ -385,14 +386,237 @@ arrow::Status ReadAndWritePartitionedDatasets()
     return arrow::Status::OK();
 }
 
+arrow::Status myFunc(arrow::compute::KernelContext* ctx, const arrow::compute::ExecSpan& exec_span, arrow::compute::ExecResult* res)
+{
+    //std::cout<<exec_span.length<<std::endl;
+    // exec_span.length contains the amount of scalar iterations, not the size of values
+    /*arrow::Datum o1,o2;
+    ARROW_ASSIGN_OR_RAISE(o1,exec_span[0].array.ToArray()->GetScalar(0));
+    ARROW_ASSIGN_OR_RAISE(o2,exec_span[1].array.ToArray()->GetScalar(0));
+    std::cout << o1.scalar_as<arrow::Int32Scalar>().value << std::endl;
+    std::cout << o2.scalar_as<arrow::Int32Scalar>().value << std::endl;
+    arrow::Datum o1_,o2_;
+    ARROW_ASSIGN_OR_RAISE(o1_,exec_span[0].array.ToArray()->GetScalar(1));
+    ARROW_ASSIGN_OR_RAISE(o2_,exec_span[1].array.ToArray()->GetScalar(1));
+    std::cout << o1_.scalar_as<arrow::Int32Scalar>().value << std::endl;
+    std::cout << o2_.scalar_as<arrow::Int32Scalar>().value << std::endl;*/
+
+    std::shared_ptr<arrow::Array> r1,r2;
+    r1 = exec_span[0].array.ToArray();
+    r2 = exec_span[1].array.ToArray();
+    arrow::Int32Builder i32b;
+    std::shared_ptr<arrow::Array> res_row;
+    for(int i=0; i < exec_span.length; i++)
+    {
+        arrow::Datum o1,o2;
+        ARROW_ASSIGN_OR_RAISE(o1,r1->GetScalar(i));
+        ARROW_ASSIGN_OR_RAISE(o2,r2->GetScalar(i));
+        int32_t r[1] = {o1.scalar_as<arrow::Int32Scalar>().value+o2.scalar_as<arrow::Int32Scalar>().value};
+        ARROW_RETURN_NOT_OK(i32b.AppendValues(r,1));
+    }
+    ARROW_ASSIGN_OR_RAISE(res_row, i32b.Finish());
+
+    res->value = res_row->data();
+    
+    /*
+    std::cout<<"output as scalars: "<<std::endl;
+    for(int i = 0; i < exec_span.length; i++)
+        std::cout<< *exec_span[i].scalar <<std::endl;
+    */
+    /*
+    std::cout<<"output as arrays"<<std::endl;
+    for(int i = 0; i < exec_span.length; i++)
+    {
+        std::shared_ptr<arrow::Array> a = exec_span[i].array.ToArray();
+        std::cout<<a.get()<<std::endl;
+    }*/
+
+    return arrow::Status::OK();
+}
+
+arrow::Status CustomCompute()
+{
+    //create a table with two columns each 5 rows
+    arrow::Int32Builder i32b;
+    int32_t n1_raw[5] = {42,24,666,111,9876};
+    int32_t n2_raw[5] = {4,1999,2023,777,6};
+    std::shared_ptr<arrow::Array> n1,n2;
+    ARROW_RETURN_NOT_OK(i32b.AppendValues(n1_raw,5));
+    ARROW_ASSIGN_OR_RAISE(n1, i32b.Finish());
+    ARROW_RETURN_NOT_OK(i32b.AppendValues(n2_raw,5));
+    ARROW_ASSIGN_OR_RAISE(n2, i32b.Finish());
+    std::shared_ptr<arrow::Field> field_n1,field_n2;
+    std::shared_ptr<arrow::Schema> schema;
+    field_n1 = arrow::field("n1",arrow::int32());
+    field_n2 = arrow::field("n2",arrow::int32());
+    schema = arrow::schema({field_n1,field_n2});
+    std::shared_ptr<arrow::Table> table;
+    table = arrow::Table::Make(schema,{n1,n2},5);
+
+    //there are fix functions, where can i find them? - in the compute ns arrow::compute::<funcName>
+    //default use case: see ComputeStuff()
+    //functions with options: (corr. option class noted at doc)
+    arrow::compute::ScalarAggregateOptions compute_options;
+    compute_options.skip_nulls = false;
+    arrow::Datum compute_res;
+    // min_max computes both and saves them in an struct with two elements
+    ARROW_ASSIGN_OR_RAISE(compute_res,arrow::compute::CallFunction("min_max",{n1},&compute_options));
+    std::shared_ptr<arrow::Scalar> min_value,max_value;
+    min_value = compute_res.scalar_as<arrow::StructScalar>().value[0];
+    max_value = compute_res.scalar_as<arrow::StructScalar>().value[1];
+
+    //input value will be casted to common type e.g. (int32 and uint16) -> both int32
+    // if implicit cast not supported: TypeError status
+
+    //aggregate functions
+    // functions which map array to scalar value, e.g.
+    // all: if all bools are true (AND)
+    // any: if one or more bools are true (OR)
+    // count: count entries
+    // count_distinct: count distinct entries
+    // first: get first elem
+    // index: search for value and get idx
+    // product: get product of all elems
+    // min: get min
+    //adding a sql like "group by <x> <y>": via param, use "hash_<aggregateFunc>" instead
+    //element wise functions: non aggregate functions, will interpret input as elem wise
+    // funcvariant with "<fname>_checked" will detect overflow (throws Invalid status)
+    // arithmetic functions, e.g.
+    //  abs: get absolut value
+    //  divide/exp/multiply/negate/sign/sqrt/subtract: do what they say
+    // bit wise funcs: e.g.
+    //  bit_wise_(and|not|or|xor)/shift_(left|right)
+    // rounding functions, e.g.
+    //  ceil/floor/round
+    // logarithmic functions, e.g.
+    //  ln/log10/log2/logb
+    // trigonemetry functions, e.g.
+    //  cos/sin/tan/acos/asin/atan
+    // comparison functions
+    //  append _equal if "or equal" should be added to comp. check, e.g.
+    //  equal/greater/less/not_equal
+    // logic functions, e.g.
+    //  and/and_not/invert/or/xor
+    // string functions
+    //  name like this "(ascii|utf8)_<fname>" expect those with * as start, e.g.
+    //  calc bool:
+    //   is_decimal/is_lower/is_upper/is_digit
+    //   *match_like (true iff theres a match given by options,equival. to sql "like <pattern>" kw)
+    //  calc string or int:
+    //   capitalize/lower/reverse/swapcase/*binary_length/replace_substring
+    //   center/lpad/rpad (append space such that column values are aligned on print)
+    //   *binary_join (second  acts as separator) /*binary_join_elem_wise 
+    //   *binary_slice (get substring from start (including) to end (excl.), negative idx allowed)
+    //   *count_substring (get number of pattern matches given via option)
+    //  calc list of string or struct: (only working with single string input), e.g.
+    //   split_whitespace (get list of substrings) /*extract_regex (get regex matches)
+    // categorisation functions, e.g.
+    //  is_(finite|inf|nan|null|valid) valid = not null
+    // selecting, e.g.
+    //  case_when (?) / choose (?)
+    // transformation, e.g.
+    //  list_value_length / make_struct
+    // conversion, e.g.
+    //  cast (cast given value to type given via option)
+    //  - use case 1: truth extraction: (string|numeric) -> boolean ()
+    //  - use case 2: same value, diff type
+    //  - use case 3: string conversions, e.g. bool -> string
+    //  - use case 4: generic conversion, e.g. struct <x> -> struct <y>
+    // component extraction of specific input types, e.g.
+    //  second/minute/day/hour/month/year (get that component as numeric from date)
+    // difference calc., e.g.
+    //  (days|minutes|..)_between
+    // random number gen.
+    //  random (get list of floats in 0..1; configgure amount via option)
+    // cumulative functions (running results)
+    //  generate an array of intermediate "step results" of the aggregate function
+    //  name like this "cumulative_<agfunc>" where agfunc is an aggregate function
+    //  start value via option
+    // selections, e.g.
+    //  filter/take (filter by condition or select by given idx)
+    // sorting/partitioning, e.g.
+    //  (|array)_sort_indices (get a idx list of a sorted input array or whatever is given, bydefault ascending)
+    //  rank (get list of ranks)
+    // pairwise functions:
+    // functions which operate elem wise in the one input array (hint: fibonacci) 
+    //  pairwise_diff (get "first derivation" points when inputs intepreted as graphpoints)
+    
+    //custom compute functions:
+    //functions are registered at the arrow::compute::FunctionRegistry
+    // has a AddFunction() which registers arrow::compute::Function
+    // arrow::compute::Function has subclass arrow::compute::FunctionImpl
+    // arrow::compute::FunctionImpl has e.g. usable subclass arrow::compute::ScalarFunction
+    std::shared_ptr<arrow::compute::ScalarFunction> myFunc_doc_s(new arrow::compute::ScalarFunction("my_func", arrow::compute::Arity::Binary() , arrow::compute::FunctionDoc("my function","my function description",{"o1","o2"})));
+    
+    // arrow::DataType(arrow::Type::type::INT32) = int32()
+    arrow::compute::InputType input_type(arrow::int32());
+    arrow::compute::OutputType output_type(arrow::int32());
+    arrow::compute::ScalarKernel myFuncImpl({input_type,input_type},output_type,&myFunc);
+    myFunc_doc_s->AddKernel(myFuncImpl);
+    
+    arrow::compute::FunctionRegistry* global_reg = arrow::compute::GetFunctionRegistry();
+    global_reg->AddFunction(myFunc_doc_s);
+
+    arrow::Datum compute_res2;
+    // min_max computes both and saves them in a struct with two elements
+    ARROW_ASSIGN_OR_RAISE(compute_res2,arrow::compute::CallFunction("my_func",{n1,n2}));
+
+    std::cout<<"compute_res2 Datum is of kind '"
+        <<compute_res2.ToString()
+        <<"' and type of content '"
+        <<compute_res2.type()->ToString()<<"'"
+        <<std::endl;
+    // get and print results as array/chunked array (note: no elem type needed)
+    
+    std::shared_ptr<arrow::ArrayData> ad = compute_res2.array();
+    arrow::NumericArray<arrow::Int32Scalar> ar(ad); //TODO: wrong template param
+    std::cout<<ar.ToString()<<std::endl;
+    
+    /*
+    //calc sum over an array
+    // create result obj
+    // very generic object holding every type of result
+    arrow::Datum sum_n1;
+    // call arrow conv func
+    ARROW_ASSIGN_OR_RAISE(sum_n1,arrow::compute::Sum({table->GetColumnByName("n1")}));
+    // get results
+    // print type of result
+    std::cout<<"sum_n1 Datum is of kind'"
+        <<sum_n1.ToString()
+        <<"' and type of content '"
+        <<sum_n1.type()->ToString()<<"'"
+        <<std::endl;
+    // print the actual result contents by requesting the contents as a specific type
+    std::cout<<sum_n1.scalar_as<arrow::Int64Scalar>().value<<std::endl;
+
+    //calc sum element wise
+    // create output
+    arrow::Datum sum_elem_wise;
+    // call generic callFunction
+    ARROW_ASSIGN_OR_RAISE(sum_elem_wise, arrow::compute::CallFunction("add",{table->GetColumnByName("n1"),table->GetColumnByName("n2")}));
+    // get results
+    // lets just print the type to see which type
+    std::cout<<"sum_elem_wise Datum is of kind'"
+        <<sum_elem_wise.ToString()
+        <<"' and type of content '"
+        <<sum_elem_wise.type()->ToString()<<"'"
+        <<std::endl;
+    // get and print results as array/chunked array (note: no elem type needed)
+    std::cout<<sum_elem_wise.chunked_array()->ToString()<<std::endl;*/
+
+    return arrow::Status::OK();
+}
+
 
 arrow::Status RunMain()
 {
+    //tutorial stuff
     ARROW_RETURN_NOT_OK(GenInitialFile());
     ARROW_RETURN_NOT_OK(ReadAndWriteStuff());
     ARROW_RETURN_NOT_OK(ComputeStuff());
     ARROW_RETURN_NOT_OK(ReadAndWritePartitionedDatasets());
-
+    //custom compute stuff
+    ARROW_RETURN_NOT_OK(CustomCompute());
     return arrow::Status::OK();
 }
 
