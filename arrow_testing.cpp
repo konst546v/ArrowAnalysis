@@ -6,11 +6,11 @@
 #include <parquet/arrow/reader.h>
 #include <parquet/arrow/writer.h>
 #include <arrow/compute/api.h>
-//#include <arrow/array/array_primitive.h>
 
 #include <unistd.h>
 #include <iostream>
 #include <vector>
+#include <functional>
 
 arrow::Status GenInitialFile(){
     //create arrow array from c++ array
@@ -386,53 +386,81 @@ arrow::Status ReadAndWritePartitionedDatasets()
     return arrow::Status::OK();
 }
 
-arrow::Status myFunc(arrow::compute::KernelContext* ctx, const arrow::compute::ExecSpan& exec_span, arrow::compute::ExecResult* res)
+// exec_span has input columns, res has the result column, all same size
+arrow::Status add1(arrow::compute::KernelContext* ctx, const arrow::compute::ExecSpan& exec_span, arrow::compute::ExecResult* res)
 {
-    //std::cout<<exec_span.length<<std::endl;
-    // exec_span.length contains the amount of scalar iterations, not the size of values
-    /*arrow::Datum o1,o2;
-    ARROW_ASSIGN_OR_RAISE(o1,exec_span[0].array.ToArray()->GetScalar(0));
-    ARROW_ASSIGN_OR_RAISE(o2,exec_span[1].array.ToArray()->GetScalar(0));
-    std::cout << o1.scalar_as<arrow::Int32Scalar>().value << std::endl;
-    std::cout << o2.scalar_as<arrow::Int32Scalar>().value << std::endl;
-    arrow::Datum o1_,o2_;
-    ARROW_ASSIGN_OR_RAISE(o1_,exec_span[0].array.ToArray()->GetScalar(1));
-    ARROW_ASSIGN_OR_RAISE(o2_,exec_span[1].array.ToArray()->GetScalar(1));
-    std::cout << o1_.scalar_as<arrow::Int32Scalar>().value << std::endl;
-    std::cout << o2_.scalar_as<arrow::Int32Scalar>().value << std::endl;*/
-
+    //get argument columns
     std::shared_ptr<arrow::Array> r1,r2;
     r1 = exec_span[0].array.ToArray();
     r2 = exec_span[1].array.ToArray();
-    arrow::Int32Builder i32b;
-    std::shared_ptr<arrow::Array> res_row;
-    for(int i=0; i < exec_span.length; i++)
-    {
+    
+    //iterate & write back sum of operands
+    int32_t* out_data = res->array_span_mutable()->GetValues<int32_t>(1); //not so sure why array of underlying type however doesnt work with arrow types
+    for(int i = 0; i < exec_span.length; i++) 
+    {   
         arrow::Datum o1,o2;
         ARROW_ASSIGN_OR_RAISE(o1,r1->GetScalar(i));
         ARROW_ASSIGN_OR_RAISE(o2,r2->GetScalar(i));
-        int32_t r[1] = {o1.scalar_as<arrow::Int32Scalar>().value+o2.scalar_as<arrow::Int32Scalar>().value};
-        ARROW_RETURN_NOT_OK(i32b.AppendValues(r,1));
+        *out_data++ = o1.scalar_as<arrow::Int32Scalar>().value + o2.scalar_as<arrow::Int32Scalar>().value;
     }
-    ARROW_ASSIGN_OR_RAISE(res_row, i32b.Finish());
-
-    res->value = res_row->data();
-    
-    /*
-    std::cout<<"output as scalars: "<<std::endl;
-    for(int i = 0; i < exec_span.length; i++)
-        std::cout<< *exec_span[i].scalar <<std::endl;
-    */
-    /*
-    std::cout<<"output as arrays"<<std::endl;
-    for(int i = 0; i < exec_span.length; i++)
-    {
-        std::shared_ptr<arrow::Array> a = exec_span[i].array.ToArray();
-        std::cout<<a.get()<<std::endl;
-    }*/
 
     return arrow::Status::OK();
 }
+
+class CustomSumKernelState: public arrow::compute::KernelState
+{
+public:
+    // executing the kernel implementation, in this case its a summation
+    // ctx not important, batch holds array datas or scalars over which the sum agg shall be exec.
+    // lets assume arrays only
+    arrow::Status execSummation(arrow::compute::KernelContext*, const arrow::compute::ExecSpan& execSpan)
+    {
+        std::shared_ptr<arrow::Array> c;
+        arrow::Datum o1;
+        c = execSpan[0].array.ToArray();
+        for(int64_t i = 0; i<c->length();i++)
+        {
+            ARROW_ASSIGN_OR_RAISE(o1,c->GetScalar(i));
+            sum+=o1.scalar_as<arrow::Int32Scalar>().value;
+        }
+        return arrow::Status::OK();
+    }
+    
+    // merging this state with another state
+    arrow::Status merge(arrow::compute::KernelContext*, arrow::compute::KernelState&& src)
+    {   
+        const CustomSumKernelState& other = static_cast<const CustomSumKernelState&>(src);
+        this->sum += other.sum;
+        return arrow::Status::OK();
+    }
+
+    // retrieving the execution results from the state
+    arrow::Status output(arrow::compute::KernelContext*, arrow::Datum* datum)
+    {
+        datum->value = std::make_shared<arrow::Int64Scalar>(sum);
+        return arrow::Status::OK();
+    }
+
+private:
+    int64_t sum = 0;
+};
+
+arrow::Status consumeSum(arrow::compute::KernelContext* ctx, const arrow::compute::ExecSpan& execSpan)
+{
+    //consume
+    return static_cast<CustomSumKernelState*>(ctx->state())->execSummation(ctx,execSpan);
+}
+arrow::Status mergeSum(arrow::compute::KernelContext* ctx, arrow::compute::KernelState&& src, arrow::compute::KernelState* dst)
+{
+    //merge
+    return static_cast<CustomSumKernelState*>(dst)->merge(ctx,std::move(src));
+}
+arrow::Status finalizeSum(arrow::compute::KernelContext* ctx, arrow::Datum* out)
+{
+    //finalize
+    return static_cast<CustomSumKernelState*>(ctx->state())->output(ctx,out);
+}
+
 
 arrow::Status CustomCompute()
 {
@@ -542,68 +570,87 @@ arrow::Status CustomCompute()
     //  pairwise_diff (get "first derivation" points when inputs intepreted as graphpoints)
     
     //custom compute functions:
-    //functions are registered at the arrow::compute::FunctionRegistry
-    // has a AddFunction() which registers arrow::compute::Function
-    // arrow::compute::Function has subclass arrow::compute::FunctionImpl
-    // arrow::compute::FunctionImpl has e.g. usable subclass arrow::compute::ScalarFunction
-    std::shared_ptr<arrow::compute::ScalarFunction> myFunc_doc_s(new arrow::compute::ScalarFunction("my_func", arrow::compute::Arity::Binary() , arrow::compute::FunctionDoc("my function","my function description",{"o1","o2"})));
-    
-    // arrow::DataType(arrow::Type::type::INT32) = int32()
+    // 1. functions are registered at the arrow::compute::FunctionRegistry
+    // 2. global FunctionRegistry (which will be used when calling fct CallFunction) can be retrieved by calling arrow::compute::GetFunctionRegistry (its also possible to create local fctregistries and use them)
+    // 3. FunctionRegistry has a AddFunction() which registers arrow::compute::Function
+    // 4. Function has subclass arrow::compute::FunctionImpl,.., arrow::compute::ScalarFunction,arrow::compute::ScalarAggregateFunction,..
+    // 5. add implementation to Function subclasses via AddKernel(..) with a corresponding Kernel, e.g. ScalarFunction needs ScalarKernel 
+    // 6. Kernel subclasses are type specific function implementations, pass in fct ptr to own behavior on construction
+    // 7. now call CallFunction as usually
+
+    // e.g. building the built-in functions for (element wise) add and aggregate add 
+    //  only use them inside this fct
+    //  declare common vars:
     arrow::compute::InputType input_type(arrow::int32());
     arrow::compute::OutputType output_type(arrow::int32());
-    arrow::compute::ScalarKernel myFuncImpl({input_type,input_type},output_type,&myFunc);
-    myFunc_doc_s->AddKernel(myFuncImpl);
-    
     arrow::compute::FunctionRegistry* global_reg = arrow::compute::GetFunctionRegistry();
-    global_reg->AddFunction(myFunc_doc_s);
-
-    arrow::Datum compute_res2;
-    // min_max computes both and saves them in a struct with two elements
-    ARROW_ASSIGN_OR_RAISE(compute_res2,arrow::compute::CallFunction("my_func",{n1,n2}));
-
-    std::cout<<"compute_res2 Datum is of kind '"
-        <<compute_res2.ToString()
+    arrow::Datum call_res;
+    //  1. element wise add:
+    //   ScalarKernel takes a fct ptr, fct will be called once containing the columns and expecting the fct to write values back to given param,
+    //   ScalarKernel creates result column of same size as given columns so fct just needs to write values  
+    //   - register stuff:
+    std::shared_ptr<arrow::compute::ScalarFunction> add_elem_doc(
+        new arrow::compute::ScalarFunction("add_elemwise", 
+            arrow::compute::Arity::Binary() , 
+            arrow::compute::FunctionDoc("add elementwise","custom function simulating add",{"o1","o2"})
+    ));
+    arrow::compute::ScalarKernel addElem({input_type,input_type},output_type,&add1);
+    ARROW_RETURN_NOT_OK(add_elem_doc->AddKernel(addElem));
+    ARROW_RETURN_NOT_OK(global_reg->AddFunction(add_elem_doc));
+    //   - call stuff:
+    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("add_elemwise",{n1,n2}));
+    std::cout<<"res add_elemwise Datum is of kind '"
+        <<call_res.ToString()
         <<"' and type of content '"
-        <<compute_res2.type()->ToString()<<"'"
+        <<call_res.type()->ToString()<<"'"
         <<std::endl;
-    // get and print results as array/chunked array (note: no elem type needed)
+    std::shared_ptr<arrow::ArrayData> ad = call_res.array();
+    arrow::NumericArray<arrow::Int32Type> ar(ad);
+    std::cout<<"res custom elem wise add:"<<ar.ToString()<<std::endl;
+    arrow::Datum call_res_;
+    ARROW_ASSIGN_OR_RAISE(call_res_, arrow::compute::CallFunction("add",{table->GetColumnByName("n1"),table->GetColumnByName("n2")}));
+    std::cout<<"res built-in elem wise add:"<<call_res_.chunked_array()->ToString()<<std::endl;
+    //  2. aggregate add:
+    //   ScalarAggregateKernel takes 4 fct ptr: init, consume, merge, finalize
+    //   fcts called once in the given order
+    //   init creates arrow::compute::KernelState and will be assigned to param ctx 
+    //   KernelState manages results of the computation
+    //   consume executes computation given columns storing results in the state
+    //   finalize writes results back to Datum param
+    //    init: KernelInit =  std::function<Result<std::unique_ptr<KernelState>>(KernelContext*, const KernelInitArgs&)>;
+    //    consume: ScalarAggregateConsume = Status (*)(KernelContext*, const ExecSpan&);
+    //    merge: ScalarAggregateMerge = Status (*)(KernelContext*, KernelState&&, KernelState*);
+    //    finalize: ScalarAggregateFinalize = Status (*)(KernelContext*, Datum*);
+    //   - register stuff:
+    std::shared_ptr<arrow::compute::ScalarAggregateFunction> add_agg_doc(
+        new arrow::compute::ScalarAggregateFunction("add_agg",
+            arrow::compute::Arity::Unary(),
+            arrow::compute::FunctionDoc("add aggregate","custom function simulation aggregate add",{"column"})
+    ));
+    std::function<arrow::Result<std::unique_ptr<arrow::compute::KernelState>>(arrow::compute::KernelContext*, const arrow::compute::KernelInitArgs&)> i = [](arrow::compute::KernelContext*, const arrow::compute::KernelInitArgs&)
+    {
+        // init
+        return arrow::Result(std::unique_ptr<arrow::compute::KernelState>(new CustomSumKernelState));
+    };
+    arrow::compute::ScalarAggregateKernel addAgg({input_type},output_type,i,consumeSum,mergeSum,finalizeSum);
+    ARROW_RETURN_NOT_OK(add_agg_doc->AddKernel(addAgg));
+    ARROW_RETURN_NOT_OK(global_reg->AddFunction(add_agg_doc));
+    //   - call stuff:
+    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("add_agg",{n1}));
+    std::cout<<"sum of custom column n1 Datum is of kind'"
+        <<call_res.ToString()
+        <<"' and type of content '"
+        <<call_res.type()->ToString()<<"'"
+        <<std::endl;
+    std::cout<<"custom sum n1:"<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
+    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("add_agg",{n2}));
+    std::cout<<"custom sum n2:"<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
+    //   - compare with built in agg sum fct results:
+    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum",{n1}));
+    std::cout<<"built-in sum n1:"<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
+    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum",{n2}));
+    std::cout<<"built-in sum n2:"<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
     
-    std::shared_ptr<arrow::ArrayData> ad = compute_res2.array();
-    arrow::NumericArray<arrow::Int32Scalar> ar(ad); //TODO: wrong template param
-    std::cout<<ar.ToString()<<std::endl;
-    
-    /*
-    //calc sum over an array
-    // create result obj
-    // very generic object holding every type of result
-    arrow::Datum sum_n1;
-    // call arrow conv func
-    ARROW_ASSIGN_OR_RAISE(sum_n1,arrow::compute::Sum({table->GetColumnByName("n1")}));
-    // get results
-    // print type of result
-    std::cout<<"sum_n1 Datum is of kind'"
-        <<sum_n1.ToString()
-        <<"' and type of content '"
-        <<sum_n1.type()->ToString()<<"'"
-        <<std::endl;
-    // print the actual result contents by requesting the contents as a specific type
-    std::cout<<sum_n1.scalar_as<arrow::Int64Scalar>().value<<std::endl;
-
-    //calc sum element wise
-    // create output
-    arrow::Datum sum_elem_wise;
-    // call generic callFunction
-    ARROW_ASSIGN_OR_RAISE(sum_elem_wise, arrow::compute::CallFunction("add",{table->GetColumnByName("n1"),table->GetColumnByName("n2")}));
-    // get results
-    // lets just print the type to see which type
-    std::cout<<"sum_elem_wise Datum is of kind'"
-        <<sum_elem_wise.ToString()
-        <<"' and type of content '"
-        <<sum_elem_wise.type()->ToString()<<"'"
-        <<std::endl;
-    // get and print results as array/chunked array (note: no elem type needed)
-    std::cout<<sum_elem_wise.chunked_array()->ToString()<<std::endl;*/
-
     return arrow::Status::OK();
 }
 
