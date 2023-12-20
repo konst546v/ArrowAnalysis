@@ -11,6 +11,9 @@
 #include <iostream>
 #include <vector>
 #include <functional>
+//for gen random numbers:
+#include <stdlib.h>
+#include <ctime>
 
 arrow::Status GenInitialFile(){
     //create arrow array from c++ array
@@ -59,11 +62,32 @@ arrow::Status GenInitialFile(){
     ARROW_RETURN_NOT_OK(int8builder.AppendValues(months_raw2,5));
     std::shared_ptr<arrow::Array> months2;
     ARROW_ASSIGN_OR_RAISE(months2, int8builder.Finish());
-
+    
     int16_t years_raw2[5] = {1999,2000,2001,2003,2004};
     ARROW_RETURN_NOT_OK(int16builder.AppendValues(years_raw2,5));
     std::shared_ptr<arrow::Array> years2;
+    
     ARROW_ASSIGN_OR_RAISE(years2,int16builder.Finish());
+    //std::shared_ptr<arrow::ArrayData> data = std::shared_ptr<arrow::ArrayData>(new arrow::ArrayData); 
+    //int16builder.FinishInternal(&data); //doesnt work
+    std::shared_ptr<arrow::Buffer> a = days2->data()->buffers.at(1);
+    std::shared_ptr<arrow::Buffer> b = years2->data()->buffers.at(1);
+    std::shared_ptr<arrow::Buffer> c = months2->data()->buffers.at(1);
+    //buffer contains the ptr to the allocated mem, so debugging and copying value of data_ should be enough
+    // watch expression: (int)days2->data()->buffers.at(1)->data_ % 64
+    
+    //manually creating arrays without copying data:
+    uint8_t my_data[16]; //theres a required min length
+    my_data[0] = 42;my_data[1] = 44;
+    std::vector<std::shared_ptr<arrow::Buffer>> bufs(2);
+    bufs[1] = arrow::Buffer::Wrap<uint8_t>(my_data,16); //TODO: is there a better way to
+    std::shared_ptr<arrow::ArrayData> arraydata = arrow::ArrayData::Make(arrow::int8(),16,bufs);
+    arrow::NumericArray<arrow::Int8Type> arr(arraydata);
+    std::cout<<arr.ToString()<<std::endl; //TODO: why is idx 3,(some other idx) "105"?
+    // watch expression for check: 
+    // arr.data_.get().buffers.at(1).get().data_
+    // &my_data
+
     //create "placeholder" containers
     arrow::ArrayVector day_vecs{days,days2}; //internal array of array container 
     
@@ -654,6 +678,86 @@ arrow::Status CustomCompute()
     return arrow::Status::OK();
 }
 
+arrow::Status someTesting()
+{
+    //1. create random data
+    //2. save data in ipc (binary) format
+    //3. read data from file
+    //4. register custom functions
+    //5. exec built in fct and measure time
+    //6. exec custom fct and measure time
+
+    // 1.:
+    const int elems = 5000000;
+    const int max = 100;
+    srand(time(NULL));
+    arrow::Int32Builder i32B;
+    for(int i=0; i < elems; i++){ARROW_RETURN_NOT_OK(i32B.Append(rand() % max + 1));}
+    std::shared_ptr<arrow::Array> nums;
+    ARROW_ASSIGN_OR_RAISE(nums,i32B.Finish());
+
+    std::shared_ptr<arrow::Field> field_nums;
+    std::shared_ptr<arrow::Schema> schema;
+    field_nums = arrow::field("numbers",arrow::int32()); //create(copy) field via ns function
+    schema = arrow::schema({field_nums}); //a date(rec) schema, or: a table entry
+    
+    std::shared_ptr<arrow::Table> table;
+    table = arrow::Table::Make(schema,{nums});
+    // 2.:
+    std::shared_ptr<arrow::io::FileOutputStream> outfile;
+    ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("nums.arrow"));
+    ARROW_ASSIGN_OR_RAISE(std::shared_ptr<arrow::ipc::RecordBatchWriter> ipc_writer,arrow::ipc::MakeFileWriter(outfile, schema));
+    ARROW_RETURN_NOT_OK(ipc_writer->WriteTable(*table));
+    ARROW_RETURN_NOT_OK(ipc_writer->Close());
+
+    // 3.:
+    std::shared_ptr<arrow::io::ReadableFile> inFile;
+    ARROW_ASSIGN_OR_RAISE(inFile, arrow::io::ReadableFile::Open("nums.arrow",arrow::default_memory_pool()));
+    
+    std::shared_ptr<arrow::ipc::RecordBatchFileReader> ipc_reader;
+    ARROW_ASSIGN_OR_RAISE(ipc_reader,arrow::ipc::RecordBatchFileReader::Open(inFile));
+    std::shared_ptr<arrow::RecordBatch> recordbatch;
+    std::vector<std::shared_ptr<arrow::RecordBatch>> recordbatches;
+    for(int i=0; i< ipc_reader->num_record_batches();i++){
+        ARROW_ASSIGN_OR_RAISE(recordbatch, ipc_reader->ReadRecordBatch(0)); //there can be many 
+        recordbatches.push_back(recordbatch);
+    }
+    std::shared_ptr<arrow::Table> table2;
+    ARROW_ASSIGN_OR_RAISE(table2,arrow::Table::FromRecordBatches(recordbatches));
+    
+    // 4.:
+    std::shared_ptr<arrow::compute::ScalarAggregateFunction> add_agg_doc(
+        new arrow::compute::ScalarAggregateFunction("sum_custom",
+            arrow::compute::Arity::Unary(),
+            arrow::compute::FunctionDoc("sum custom","custom function simulation aggregate add",{"column"})
+    ));
+    std::function<arrow::Result<std::unique_ptr<arrow::compute::KernelState>>(arrow::compute::KernelContext*, const arrow::compute::KernelInitArgs&)> i = [](arrow::compute::KernelContext*, const arrow::compute::KernelInitArgs&)
+    {
+        // init
+        return arrow::Result(std::unique_ptr<arrow::compute::KernelState>(new CustomSumKernelState));
+    };
+    arrow::compute::ScalarAggregateKernel addAgg({arrow::int32()},arrow::int32(),i,consumeSum,mergeSum,finalizeSum);
+    ARROW_RETURN_NOT_OK(add_agg_doc->AddKernel(addAgg));
+    ARROW_RETURN_NOT_OK(arrow::compute::GetFunctionRegistry()->AddFunction(add_agg_doc));
+    
+    // 5.:
+    arrow::Datum call_res;
+    clock_t start = clock();
+    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum",{table2->GetColumnByName("numbers")}));
+    std::cout<<"built-in sum res: "<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
+    clock_t end = clock();
+    std::cout<<"built-in sum exec time: "<<(end-start)<<std::endl;
+
+    // 6.:
+    start = clock();
+    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum_custom",{table2->GetColumnByName("numbers")}));
+    std::cout<<"custom sum nums:"<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
+    end = clock();
+    std::cout<<"custom sum exec time: "<<(end - start)<<std::endl;
+
+    return arrow::Status::OK();
+}
+
 
 arrow::Status RunMain()
 {
@@ -664,6 +768,8 @@ arrow::Status RunMain()
     ARROW_RETURN_NOT_OK(ReadAndWritePartitionedDatasets());
     //custom compute stuff
     ARROW_RETURN_NOT_OK(CustomCompute());
+    //some performance testing
+    ARROW_RETURN_NOT_OK(someTesting());
     return arrow::Status::OK();
 }
 
