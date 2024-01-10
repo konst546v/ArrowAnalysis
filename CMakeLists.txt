@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(ArrowTesting)
+# do not optimize on debug, but use high optimisation otherwise
+set(CMAKE_CXX_FLAGS_DEBUG "-g -O0")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 find_package(Arrow REQUIRED)
 # the apache arrow pkg
 find_package(Parquet REQUIRED)

@@ -14,6 +14,7 @@
 //for gen random numbers:
 #include <stdlib.h>
 #include <ctime>
+#include <chrono>
 
 arrow::Status GenInitialFile(){
     //create arrow array from c++ array
@@ -439,13 +440,15 @@ public:
     // lets assume arrays only
     arrow::Status execSummation(arrow::compute::KernelContext*, const arrow::compute::ExecSpan& execSpan)
     {
-        std::shared_ptr<arrow::Array> c;
-        arrow::Datum o1;
-        c = execSpan[0].array.ToArray();
-        for(int64_t i = 0; i<c->length();i++)
+        //partially taken from internal impl
+        // note: assumes array data stored as regular c array
+        //  doesnt work if it has to work with arrow-arrays which contain null-values (cuz they are stored more compact) 
+        const arrow::ArraySpan* arrData = &execSpan[0].array;
+        // assumption: elem 0 refers to null-array where set bits indicate if the elem is null
+        const int32_t* values = arrData->GetValues<int32_t>(1);
+        for(int64_t i = 0; i < arrData->length;i++)
         {
-            ARROW_ASSIGN_OR_RAISE(o1,c->GetScalar(i));
-            sum+=o1.scalar_as<arrow::Int32Scalar>().value;
+            sum+=values[i];
         }
         return arrow::Status::OK();
     }
@@ -471,7 +474,7 @@ private:
 
 arrow::Status consumeSum(arrow::compute::KernelContext* ctx, const arrow::compute::ExecSpan& execSpan)
 {
-    //consume
+    //consume aaaa
     return static_cast<CustomSumKernelState*>(ctx->state())->execSummation(ctx,execSpan);
 }
 arrow::Status mergeSum(arrow::compute::KernelContext* ctx, arrow::compute::KernelState&& src, arrow::compute::KernelState* dst)
@@ -687,8 +690,23 @@ arrow::Status someTesting()
     //5. exec built in fct and measure time
     //6. exec custom fct and measure time
 
+    // also measuring time for all tasks
+    std::chrono::high_resolution_clock::time_point start; 
+    std::string diff;
+    //func for retrtrieving execution time from start start
+    auto getTime = [&start](){
+        auto diff = std::chrono::high_resolution_clock::now() - start;
+        std::stringstream ss;
+        // 1s = 10^6 microseconds
+        ss<<"seconds: "<<std::chrono::duration_cast<std::chrono::seconds>(diff).count()
+        <<" or micros.: "<<std::chrono::duration_cast<std::chrono::microseconds>(diff).count();
+        return ss.str();
+    };
+
+
     // 1.:
-    const int elems = 5000000;
+    start = std::chrono::high_resolution_clock::now();
+    const int elems = 50000000;
     const int max = 100;
     srand(time(NULL));
     arrow::Int32Builder i32B;
@@ -700,17 +718,21 @@ arrow::Status someTesting()
     std::shared_ptr<arrow::Schema> schema;
     field_nums = arrow::field("numbers",arrow::int32()); //create(copy) field via ns function
     schema = arrow::schema({field_nums}); //a date(rec) schema, or: a table entry
-    
     std::shared_ptr<arrow::Table> table;
     table = arrow::Table::Make(schema,{nums});
+    std::cout<<"data generation took: "<<getTime()<<std::endl;
+    
     // 2.:
+    start = std::chrono::high_resolution_clock::now();
     std::shared_ptr<arrow::io::FileOutputStream> outfile;
     ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("nums.arrow"));
     ARROW_ASSIGN_OR_RAISE(std::shared_ptr<arrow::ipc::RecordBatchWriter> ipc_writer,arrow::ipc::MakeFileWriter(outfile, schema));
     ARROW_RETURN_NOT_OK(ipc_writer->WriteTable(*table));
     ARROW_RETURN_NOT_OK(ipc_writer->Close());
+    std::cout<<"writing table took: "<<getTime()<<std::endl;
 
     // 3.:
+    start = std::chrono::high_resolution_clock::now();
     std::shared_ptr<arrow::io::ReadableFile> inFile;
     ARROW_ASSIGN_OR_RAISE(inFile, arrow::io::ReadableFile::Open("nums.arrow",arrow::default_memory_pool()));
     
@@ -724,8 +746,10 @@ arrow::Status someTesting()
     }
     std::shared_ptr<arrow::Table> table2;
     ARROW_ASSIGN_OR_RAISE(table2,arrow::Table::FromRecordBatches(recordbatches));
-    
+    std::cout<<"reading table took:"<<getTime()<<std::endl;
+
     // 4.:
+    start = std::chrono::high_resolution_clock::now();
     std::shared_ptr<arrow::compute::ScalarAggregateFunction> add_agg_doc(
         new arrow::compute::ScalarAggregateFunction("sum_custom",
             arrow::compute::Arity::Unary(),
@@ -739,21 +763,27 @@ arrow::Status someTesting()
     arrow::compute::ScalarAggregateKernel addAgg({arrow::int32()},arrow::int32(),i,consumeSum,mergeSum,finalizeSum);
     ARROW_RETURN_NOT_OK(add_agg_doc->AddKernel(addAgg));
     ARROW_RETURN_NOT_OK(arrow::compute::GetFunctionRegistry()->AddFunction(add_agg_doc));
+    std::cout<<"custom function init took: "<<getTime()<<std::endl;
     
-    // 5.:
-    arrow::Datum call_res;
-    clock_t start = clock();
-    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum",{table2->GetColumnByName("numbers")}));
-    std::cout<<"built-in sum res: "<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
-    clock_t end = clock();
-    std::cout<<"built-in sum exec time: "<<(end-start)<<std::endl;
 
+    // 5.:
+    std::cout<<"start measuring"<<std::endl;
+    arrow::Datum call_res;
+    
+    start = std::chrono::high_resolution_clock::now();
+    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum",{table2->GetColumnByName("numbers")}));
+    diff = getTime();
+    std::cout<<"built-in sum res: "<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
+    
+    std::cout<<"built-in sum exec time: "<<diff<<std::endl;
+    
     // 6.:
-    start = clock();
+    start = std::chrono::high_resolution_clock::now();
     ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum_custom",{table2->GetColumnByName("numbers")}));
+    diff = getTime();
     std::cout<<"custom sum nums:"<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
-    end = clock();
-    std::cout<<"custom sum exec time: "<<(end - start)<<std::endl;
+    
+    std::cout<<"custom sum exec time: "<<diff<<std::endl;
 
     return arrow::Status::OK();
 }
@@ -762,6 +792,7 @@ arrow::Status someTesting()
 arrow::Status RunMain()
 {
     //tutorial stuff
+    //
     ARROW_RETURN_NOT_OK(GenInitialFile());
     ARROW_RETURN_NOT_OK(ReadAndWriteStuff());
     ARROW_RETURN_NOT_OK(ComputeStuff());
