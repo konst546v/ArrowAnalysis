@@ -6,7 +6,7 @@
 #include <parquet/arrow/reader.h>
 #include <parquet/arrow/writer.h>
 #include <arrow/compute/api.h>
-//its unclear if gandiva has an general api
+
 #include <gandiva/node.h>
 #include <gandiva/condition.h>
 #include <gandiva/expression.h>
@@ -14,15 +14,11 @@
 #include <gandiva/projector.h>
 #include <gandiva/filter.h>
 
-
-#include <unistd.h>
 #include <iostream>
+#include <sstream>
 #include <vector>
-#include <functional>
-//for gen random numbers:
-#include <stdlib.h>
-#include <ctime>
-#include <chrono>
+
+#include "arrow_custom_kernel.cpp"
 
 arrow::Status GenInitialFile(){
     //create arrow array from c++ array
@@ -30,32 +26,28 @@ arrow::Status GenInitialFile(){
     int8_t days_raw[5] = {1,2,3,4,5};
     ARROW_RETURN_NOT_OK(int8builder.AppendValues(days_raw,5)); //return bad arrow status if adding values did not work
     // build the arrow array
-    std::shared_ptr<arrow::Array> days;
+    S(arrow::Array,days);
     ARROW_ASSIGN_OR_RAISE(days,int8builder.Finish()); //get arrow array & reset & return on bad arrow status..
     // build some more arrays for next concept
     int8_t months_raw[5] = {11,12,1,2,4};
     ARROW_RETURN_NOT_OK(int8builder.AppendValues(months_raw,5)); //return bad arrow status if adding values did not work
-    std::shared_ptr<arrow::Array> months;
+    S(arrow::Array,months);
     ARROW_ASSIGN_OR_RAISE(months,int8builder.Finish()); //get arrow array & reset & return on bad arrow status..
     // build some more using diff type
     arrow::Int16Builder int16builder;
     int16_t years_raw[5] = {1911,1932,2011,2032,1999};
     ARROW_RETURN_NOT_OK(int16builder.AppendValues(years_raw,5)); //return bad arrow status if adding values did not work
-    std::shared_ptr<arrow::Array> years;
+    S(arrow::Array,years);
     ARROW_ASSIGN_OR_RAISE(years,int16builder.Finish()); //get arrow array & reset & return on bad arrow status..
     
-
     //create a recordbatch
     // create structure
-    std::shared_ptr<arrow::Field> field_day, field_month, field_year;
-    std::shared_ptr<arrow::Schema> schema;
-    field_day = arrow::field("Day",arrow::int8()); //create(copy) field via ns function
-    field_month = arrow::field("Month",arrow::int8());
-    field_year = arrow::field("Year",arrow::int16());
-    schema = arrow::schema({field_day,field_month,field_year}); //a date(rec) schema, or: a table entry
+    S(arrow::Field,field_day) = arrow::field("Day",arrow::int8()); //create(copy) field via ns function
+    S(arrow::Field,field_month) = arrow::field("Month",arrow::int8());
+    S(arrow::Field,field_year) = arrow::field("Year",arrow::int16());
+    S(arrow::Schema,schema) = arrow::schema({field_day,field_month,field_year}); //a date(rec) schema, or: a table entry
     // insert data using arrow arrays
-    std::shared_ptr<arrow::RecordBatch> record_batch;
-    record_batch = arrow::RecordBatch::Make(schema,5,{days,months,years}); //table of dates
+    S(arrow::RecordBatch,record_batch) = arrow::RecordBatch::Make(schema,5,{days,months,years}); //table of dates
     // print
     std::cout << record_batch->ToString() << std::endl;
     
@@ -64,24 +56,20 @@ arrow::Status GenInitialFile(){
     // create origin arrays using the already ex. builders
     int8_t days_raw2[5] = {1,2,3,4,5};
     ARROW_RETURN_NOT_OK(int8builder.AppendValues(days_raw2,5));
-    std::shared_ptr<arrow::Array> days2;
-    ARROW_ASSIGN_OR_RAISE(days2, int8builder.Finish());
+    ARROW_ASSIGN_OR_RAISE(S(arrow::Array,days2), int8builder.Finish());
 
     int8_t months_raw2[5] = {2,2,1,4,1};
     ARROW_RETURN_NOT_OK(int8builder.AppendValues(months_raw2,5));
-    std::shared_ptr<arrow::Array> months2;
-    ARROW_ASSIGN_OR_RAISE(months2, int8builder.Finish());
+    ARROW_ASSIGN_OR_RAISE(S(arrow::Array,months2), int8builder.Finish());
     
     int16_t years_raw2[5] = {1999,2000,2001,2003,2004};
     ARROW_RETURN_NOT_OK(int16builder.AppendValues(years_raw2,5));
-    std::shared_ptr<arrow::Array> years2;
-    
-    ARROW_ASSIGN_OR_RAISE(years2,int16builder.Finish());
+    ARROW_ASSIGN_OR_RAISE(S(arrow::Array,years2),int16builder.Finish());
     //std::shared_ptr<arrow::ArrayData> data = std::shared_ptr<arrow::ArrayData>(new arrow::ArrayData); 
     //int16builder.FinishInternal(&data); //doesnt work
-    std::shared_ptr<arrow::Buffer> a = days2->data()->buffers.at(1);
-    std::shared_ptr<arrow::Buffer> b = years2->data()->buffers.at(1);
-    std::shared_ptr<arrow::Buffer> c = months2->data()->buffers.at(1);
+    S(arrow::Buffer,a) = days2->data()->buffers.at(1);
+    S(arrow::Buffer,b) = years2->data()->buffers.at(1);
+    S(arrow::Buffer,c) = months2->data()->buffers.at(1);
     //buffer contains the ptr to the allocated mem, so debugging and copying value of data_ should be enough
     // watch expression: (int)days2->data()->buffers.at(1)->data_ % 64
     
@@ -90,7 +78,7 @@ arrow::Status GenInitialFile(){
     my_data[0] = 42;my_data[1] = 44;
     std::vector<std::shared_ptr<arrow::Buffer>> bufs(2);
     bufs[1] = arrow::Buffer::Wrap<uint8_t>(my_data,16); //TODO: is there a better way to
-    std::shared_ptr<arrow::ArrayData> arraydata = arrow::ArrayData::Make(arrow::int8(),16,bufs);
+    S(arrow::ArrayData,arraydata) = arrow::ArrayData::Make(arrow::int8(),16,bufs);
     arrow::NumericArray<arrow::Int8Type> arr(arraydata);
     std::cout<<arr.ToString()<<std::endl; //TODO: why is idx 3,(some other idx) "105"?
     // watch expression for check: 
@@ -102,17 +90,15 @@ arrow::Status GenInitialFile(){
     
     //create chunked array
     // - understandable as some kind of cheap concatenated array 
-    std::shared_ptr<arrow::ChunkedArray> day_chunks = std::make_shared<arrow::ChunkedArray>(day_vecs);
+    M(arrow::ChunkedArray,day_chunks,(day_vecs));
 
     // Repeat for months.
     arrow::ArrayVector month_vecs{months, months2};
-    std::shared_ptr<arrow::ChunkedArray> month_chunks =
-    std::make_shared<arrow::ChunkedArray>(month_vecs);
+    M(arrow::ChunkedArray,month_chunks,(month_vecs));
 
     // Repeat for years.
     arrow::ArrayVector year_vecs{years, years2};
-    std::shared_ptr<arrow::ChunkedArray> year_chunks =
-    std::make_shared<arrow::ChunkedArray>(year_vecs);
+    M(arrow::ChunkedArray,year_chunks,(year_vecs));
 
     //create tables:
     // - recordbatch created from array
@@ -120,23 +106,21 @@ arrow::Status GenInitialFile(){
     // - both use same schema for describing columns
     // -> recordbatch has limited rowsize since arraysize limited
     // -> table can be bigger but doesnt guarantee columns in columnar format
-    std::shared_ptr<arrow::Table> table;
-    table = arrow::Table::Make(schema,{day_chunks,month_chunks,year_chunks});
+    S(arrow::Table,table) = arrow::Table::Make(schema,{day_chunks,month_chunks,year_chunks});
 
     
     // Write out test files in IPC, CSV, and Parquet for the example to use.
-    std::shared_ptr<arrow::io::FileOutputStream> outfile;
-    ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("test_in.arrow"));
-    ARROW_ASSIGN_OR_RAISE(std::shared_ptr<arrow::ipc::RecordBatchWriter> ipc_writer,arrow::ipc::MakeFileWriter(outfile, schema));
+    ARROW_ASSIGN_OR_RAISE(S(arrow::io::FileOutputStream,outfile), arrow::io::FileOutputStream::Open(BUILDDIR "/test_in.arrow"));
+    ARROW_ASSIGN_OR_RAISE(S(arrow::ipc::RecordBatchWriter,ipc_writer),arrow::ipc::MakeFileWriter(outfile, schema));
     ARROW_RETURN_NOT_OK(ipc_writer->WriteTable(*table));
     ARROW_RETURN_NOT_OK(ipc_writer->Close());
 
-    ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("test_in.csv"));
+    ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open(BUILDDIR "/test_in.csv"));
     ARROW_ASSIGN_OR_RAISE(auto csv_writer,arrow::csv::MakeCSVWriter(outfile, table->schema()));
     ARROW_RETURN_NOT_OK(csv_writer->WriteTable(*table));
     ARROW_RETURN_NOT_OK(csv_writer->Close());
 
-    ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("test_in.parquet"));
+    ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open(BUILDDIR "/test_in.parquet"));
     PARQUET_THROW_NOT_OK(parquet::arrow::WriteTable(*table, arrow::default_memory_pool(), outfile, 5));
 
 
@@ -148,26 +132,20 @@ arrow::Status ReadAndWriteStuff()
     ARROW_RETURN_NOT_OK(GenInitialFile());
     
     //read a (ipc) file
-    // create an object which acts as some kind of container for the opened file
-    std::shared_ptr<arrow::io::ReadableFile> inFile;
-    // open the file
-    ARROW_ASSIGN_OR_RAISE(inFile, arrow::io::ReadableFile::Open("test_in.arrow",arrow::default_memory_pool()));
+    // create an object which acts as some kind of container for the opened file & open the file
+    ARROW_ASSIGN_OR_RAISE(S(arrow::io::ReadableFile,inFile), arrow::io::ReadableFile::Open(BUILDDIR "/test_in.arrow",arrow::default_memory_pool()));
     // use a more concrete reader to read from the container e.g. assume the contents to be recordbatches (tables)
-    std::shared_ptr<arrow::ipc::RecordBatchFileReader> ipc_reader;
-    ARROW_ASSIGN_OR_RAISE(ipc_reader,arrow::ipc::RecordBatchFileReader::Open(inFile));
+    ARROW_ASSIGN_OR_RAISE(S(arrow::ipc::RecordBatchFileReader,ipc_reader),arrow::ipc::RecordBatchFileReader::Open(inFile));
     // get contents into a recordbatch
-    std::shared_ptr<arrow::RecordBatch> recordbatch;
-    ARROW_ASSIGN_OR_RAISE(recordbatch, ipc_reader->ReadRecordBatch(0)); //there can be many recordbatches in a file
+    ARROW_ASSIGN_OR_RAISE(S(arrow::RecordBatch,recordbatch), ipc_reader->ReadRecordBatch(0)); //there can be many recordbatches in a file
     //write a (ipc) file
-    std::shared_ptr<arrow::io::FileOutputStream> outFile;
     // bind the object to the file to be written to
-    ARROW_ASSIGN_OR_RAISE(outFile, arrow::io::FileOutputStream::Open("test_out.arrow"));
+    ARROW_ASSIGN_OR_RAISE(S(arrow::io::FileOutputStream,outFile), arrow::io::FileOutputStream::Open(BUILDDIR "/test_out.arrow"));
     // create an object responsible for writing spec arrow ds
     // in this case, use a recordbatch because we want to write the just read recordbatch
     // in order to create a recordbatch writer we need the output file obj and the schema,
     //  use just created obj file and schema from read recordbatch
-    std::shared_ptr<arrow::ipc::RecordBatchWriter> ipc_writer;
-    ARROW_ASSIGN_OR_RAISE(ipc_writer,arrow::ipc::MakeFileWriter(outFile,recordbatch->schema()));
+    ARROW_ASSIGN_OR_RAISE(S(arrow::ipc::RecordBatchWriter,ipc_writer),arrow::ipc::MakeFileWriter(outFile,recordbatch->schema()));
     // write contents to physical file:
     ARROW_RETURN_NOT_OK(ipc_writer->WriteRecordBatch(*recordbatch));
     // close file (ipc writers special use case)
@@ -175,11 +153,9 @@ arrow::Status ReadAndWriteStuff()
 
     //read a (csv) file
     //reuse input and output file objs
-    ARROW_ASSIGN_OR_RAISE(inFile, arrow::io::ReadableFile::Open("test_in.csv"));
-    // create table ptr of contents to be read to
-    std::shared_ptr<arrow::Table> csv_table;
+    ARROW_ASSIGN_OR_RAISE(inFile, arrow::io::ReadableFile::Open(BUILDDIR "/test_in.csv"));
     // create a csv reader with default options
-    std::shared_ptr<arrow::csv::TableReader> csv_reader;
+    S(arrow::csv::TableReader,csv_reader);
     ARROW_ASSIGN_OR_RAISE(csv_reader, arrow::csv::TableReader::Make(
         arrow::io::default_io_context(),
         inFile,
@@ -187,13 +163,12 @@ arrow::Status ReadAndWriteStuff()
         arrow::csv::ParseOptions::Defaults(),
         arrow::csv::ConvertOptions::Defaults()));
     // read actual contents
-    ARROW_ASSIGN_OR_RAISE(csv_table, csv_reader->Read());
+    ARROW_ASSIGN_OR_RAISE(S(arrow::Table,csv_table), csv_reader->Read());
     //write a (csv) file
     // get output file obj, use already ex obj
-    ARROW_ASSIGN_OR_RAISE(outFile,arrow::io::FileOutputStream::Open("test_out.csv"));
+    ARROW_ASSIGN_OR_RAISE(outFile,arrow::io::FileOutputStream::Open(BUILDDIR "/test_out.csv"));
     // create writer, dont ask why its now also the ipc recordbatch writer
-    std::shared_ptr<arrow::ipc::RecordBatchWriter> csv_writer;
-    ARROW_ASSIGN_OR_RAISE(csv_writer,arrow::csv::MakeCSVWriter(outFile,csv_table->schema()));
+    ARROW_ASSIGN_OR_RAISE(S(arrow::ipc::RecordBatchWriter,csv_writer),arrow::csv::MakeCSVWriter(outFile,csv_table->schema()));
     // write content
     ARROW_RETURN_NOT_OK(csv_writer->WriteTable(*csv_table));
     // close file
@@ -201,29 +176,21 @@ arrow::Status ReadAndWriteStuff()
 
     //read a (parquet) file
     // get input file
-    ARROW_ASSIGN_OR_RAISE(inFile, arrow::io::ReadableFile::Open("test_in.parquet"));
+    ARROW_ASSIGN_OR_RAISE(inFile, arrow::io::ReadableFile::Open(BUILDDIR "/test_in.parquet"));
     // get parquet reader (note: extern dependency)
-    std::unique_ptr<parquet::arrow::FileReader> pReader;
+    U(parquet::arrow::FileReader,pReader);
     PARQUET_THROW_NOT_OK(parquet::arrow::OpenFile(inFile,arrow::default_memory_pool(), &pReader));
     // create table ptr and read contents into arrow table using the parquet reader
-    std::shared_ptr<arrow::Table> pTable;
+    S(arrow::Table,pTable);
     PARQUET_THROW_NOT_OK(pReader->ReadTable(&pTable));
     //writing a (parquet) file
     // get output file
-    ARROW_ASSIGN_OR_RAISE(outFile, arrow::io::FileOutputStream::Open("test_out.parquet"));
+    ARROW_ASSIGN_OR_RAISE(outFile, arrow::io::FileOutputStream::Open(BUILDDIR "/test_out.parquet"));
     // write without writer obj
     PARQUET_THROW_NOT_OK(parquet::arrow::WriteTable(*pTable,arrow::default_memory_pool(),outFile,5));
 
     return arrow::Status::OK();
 }
-
-//macro for faster typing of shared ptr instantiation
-#define S(t,n)\
-    std::shared_ptr<t> n
-
-//macro for faster typing of shared ptr creation
-#define M(t,n,a)\
-    S(t,n) = std::make_shared<t>(t a);
 
 arrow::Status ComputeStuff()
 {
@@ -231,18 +198,14 @@ arrow::Status ComputeStuff()
     arrow::Int32Builder i32b;
     int32_t n1_raw[5] = {42,24,666,111,9876};
     int32_t n2_raw[5] = {4,1999,2023,777,6};
-    std::shared_ptr<arrow::Array> n1,n2;
     ARROW_RETURN_NOT_OK(i32b.AppendValues(n1_raw,5));
-    ARROW_ASSIGN_OR_RAISE(n1, i32b.Finish());
+    ARROW_ASSIGN_OR_RAISE(S(arrow::Array,n1), i32b.Finish());
     ARROW_RETURN_NOT_OK(i32b.AppendValues(n2_raw,5));
-    ARROW_ASSIGN_OR_RAISE(n2, i32b.Finish());
-    std::shared_ptr<arrow::Field> field_n1,field_n2;
-    std::shared_ptr<arrow::Schema> schema;
-    field_n1 = arrow::field("n1",arrow::int32());
-    field_n2 = arrow::field("n2",arrow::int32());
-    schema = arrow::schema({field_n1,field_n2});
-    std::shared_ptr<arrow::Table> table;
-    table = arrow::Table::Make(schema,{n1,n2},5);
+    ARROW_ASSIGN_OR_RAISE(S(arrow::Array,n2), i32b.Finish());
+    S(arrow::Field,field_n1) = arrow::field("n1",arrow::int32());
+    S(arrow::Field,field_n2) = arrow::field("n2",arrow::int32());
+    S(arrow::Schema,schema) = arrow::schema({field_n1,field_n2});
+    S(arrow::Table,table) = arrow::Table::Make(schema,{n1,n2},5);
 
     //calc sum over an array
     // create result obj
@@ -308,8 +271,8 @@ arrow::Status ComputeStuff()
     
     //  v1: use dataset scanner:
     //   - expression and scanner creation:
-    auto dataset = std::make_shared<arrow::dataset::InMemoryDataset>(table);
-    auto scanOptions = std::make_shared<arrow::dataset::ScanOptions>();
+    S(arrow::dataset::InMemoryDataset,dataset) = std::make_shared<arrow::dataset::InMemoryDataset>(table);
+    S(arrow::dataset::ScanOptions,scanOptions) = std::make_shared<arrow::dataset::ScanOptions>();
     scanOptions->filter = 
         arrow::compute::greater(arrow::compute::field_ref("n2"),arrow::compute::literal(1000));
     auto scanner = arrow::dataset::ScannerBuilder(dataset,scanOptions).Finish();
@@ -328,7 +291,7 @@ arrow::Status ComputeStuff()
     S(gandiva::Node,gNCond) = 
         gandiva::TreeExprBuilder::MakeFunction("greater_than",{gNField_n2,gNLiteral},arrow::boolean());
     S(gandiva::Condition,gCond) =
-        gandiva::TreeExprBuilder::MakeCondition(gNCond); //its the good night condition, what else?
+        gandiva::TreeExprBuilder::MakeCondition(gNCond);
     //   - filter creation and execution:
     S(gandiva::Filter,f);
     ARROW_RETURN_NOT_OK(gandiva::Filter::Make(schema,gCond, &f));
@@ -349,12 +312,9 @@ arrow::Status GandivaStuff(){
     // create a column
     arrow::Int32Builder i32b;
     int32_t n2_raw[5] = {1,2,3,4,5};
-    S(arrow::Array,n2);
     ARROW_RETURN_NOT_OK(i32b.AppendValues(n2_raw,5));
-    ARROW_ASSIGN_OR_RAISE(n2, i32b.Finish());
-    S(arrow::Field,field_n2);
-    S(arrow::Schema, schema);
-    field_n2 = arrow::field("n2",arrow::int32());
+    ARROW_ASSIGN_OR_RAISE(S(arrow::Array,n2), i32b.Finish());
+    S(arrow::Field,field_n2) = arrow::field("n2",arrow::int32());
     
     //  1. expr tree creation:
     S(gandiva::Node,gNField_n2) = gandiva::TreeExprBuilder::MakeField(field_n2);
@@ -432,9 +392,9 @@ arrow::Result<std::shared_ptr<arrow::Table>> CreateTable() {
     auto schema =
     arrow::schema({arrow::field("a", arrow::int64()), arrow::field("b", arrow::int64()),
     arrow::field("c", arrow::int64())});
-    std::shared_ptr<arrow::Array> array_a;
-    std::shared_ptr<arrow::Array> array_b;
-    std::shared_ptr<arrow::Array> array_c;
+    S(arrow::Array,array_a);
+    S(arrow::Array,array_b);
+    S(arrow::Array,array_c);
     arrow::NumericBuilder<arrow::Int64Type> builder;
     ARROW_RETURN_NOT_OK(builder.AppendValues({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}));
     ARROW_RETURN_NOT_OK(builder.Finish(&array_a));
@@ -453,7 +413,7 @@ arrow::Result<std::string> CreateExampleParquetDataset(
     const std::string& root_path) {
     // Much like CreateTable(), this is utility that gets us the dataset we'll be reading
     // from. Don't worry, we also write a dataset in the example proper.
-    auto base_path = root_path + "parquet_dataset";
+    auto base_path = root_path + "/" BUILDDIR "/parquet_dataset";
     ARROW_RETURN_NOT_OK(filesystem->CreateDir(base_path));
     // Create an Arrow Table
     ARROW_ASSIGN_OR_RAISE(auto table, CreateTable());
@@ -472,7 +432,6 @@ arrow::Result<std::string> CreateExampleParquetDataset(
 arrow::Status PrepareEnv() {
     // Get our environment prepared for reading, by setting up some quick writing.
     ARROW_ASSIGN_OR_RAISE(auto src_table, CreateTable())
-    std::shared_ptr<arrow::fs::FileSystem> setup_fs;
     // Note this operates in the directory the executable is built in.
     char setup_path[256];
     char* result = getcwd(setup_path, 256);
@@ -480,8 +439,8 @@ arrow::Status PrepareEnv() {
     return arrow::Status::IOError("Fetching PWD failed.");
     }
 
-    ARROW_ASSIGN_OR_RAISE(setup_fs, arrow::fs::FileSystemFromUriOrPath(setup_path));
-    ARROW_ASSIGN_OR_RAISE(auto dset_path, CreateExampleParquetDataset(setup_fs, ""));
+    ARROW_ASSIGN_OR_RAISE(S(arrow::fs::FileSystem,setup_fs), arrow::fs::FileSystemFromUriOrPath(setup_path));
+    ARROW_ASSIGN_OR_RAISE(auto dset_path, CreateExampleParquetDataset(setup_fs, "."));
 
     return arrow::Status::OK();
 }
@@ -491,7 +450,7 @@ arrow::Status ReadAndWritePartitionedDatasets()
     //read fragmented data
     ARROW_RETURN_NOT_OK(PrepareEnv());
     // create os filesystem interface obj 
-    std::shared_ptr<arrow::fs::FileSystem> fs;
+    S(arrow::fs::FileSystem,fs);
     // cd to this folder (using cwd via unistd)
     char init_path[256];
     char* result = getcwd(init_path,256);
@@ -499,13 +458,13 @@ arrow::Status ReadAndWritePartitionedDatasets()
     ARROW_ASSIGN_OR_RAISE(fs, arrow::fs::FileSystemFromUriOrPath(init_path));
     // create and configure a selector
     arrow::fs::FileSelector selector;
-    selector.base_dir = "parquet_dataset";
+    selector.base_dir = BUILDDIR "/parquet_dataset";
     selector.recursive = true;
     // create dataset factory options obj
     arrow::dataset::FileSystemFactoryOptions options;
     options.partitioning = arrow::dataset::HivePartitioning::MakeFactory();
     // create type obj of to be read format
-    auto read_format = std::make_shared<arrow::dataset::ParquetFileFormat>();
+    M(arrow::dataset::ParquetFileFormat,read_format,());
     // now create our factory which will read parque format files in ./parque_dataset and create datasets
     ARROW_ASSIGN_OR_RAISE(auto factory, arrow::dataset::FileSystemDatasetFactory::Make(fs,selector,read_format,options));
     // read all:
@@ -524,7 +483,7 @@ arrow::Status ReadAndWritePartitionedDatasets()
     // build the scanner
     ARROW_ASSIGN_OR_RAISE(auto read_scanner, read_scanner_builder->Finish());
     // use the scanner to create a table
-    ARROW_ASSIGN_OR_RAISE(std::shared_ptr<arrow::Table> table, read_scanner->ToTable());
+    ARROW_ASSIGN_OR_RAISE(S(arrow::Table,table), read_scanner->ToTable());
     // print the table!
     std::cout<<table->ToString()<<std::endl;
     
@@ -532,21 +491,21 @@ arrow::Status ReadAndWritePartitionedDatasets()
     //or: partitioning an arrow table on disk
     //lets consider splitting up the just read table based on cell values of row "a"
     // create batch reader 
-    std::shared_ptr<arrow::TableBatchReader> write_datasets = std::make_shared<arrow::TableBatchReader>(table);
+    M(arrow::TableBatchReader,write_datasets,(table));
     // create scanner for creating tables from given table via builder 
     auto write_scanner_builder = arrow::dataset::ScannerBuilder::FromRecordBatchReader(write_datasets);
     ARROW_ASSIGN_OR_RAISE(auto writer_scanner, write_scanner_builder->Finish());
     // configure split schema..
     auto partition_schema = arrow::schema({arrow::field("a", arrow::utf8())});
     // configure partitioning algorithm
-    auto partitioning = std::make_shared<arrow::dataset::HivePartitioning>(partition_schema);
+    M(arrow::dataset::HivePartitioning,partitioning,(partition_schema));
     // configure output file format
-    auto write_format = std::make_shared<arrow::dataset::ParquetFileFormat>();
+    M(arrow::dataset::ParquetFileFormat,write_format,());
     // configure filesystem write options
     arrow::dataset::FileSystemDatasetWriteOptions write_options;
     write_options.file_write_options = write_format->DefaultWriteOptions();
     write_options.filesystem = fs; // cwd
-    write_options.base_dir = "write_dataset"; //folder to be created within cwd
+    write_options.base_dir = BUILDDIR "/write_dataset"; //folder to be created within cwd
     write_options.partitioning = partitioning;
     write_options.basename_template = "part{i}.parquet"; //gen filenames template
     write_options.existing_data_behavior = arrow::dataset::ExistingDataBehavior::kOverwriteOrIgnore; //if files already ex, overwrite them
@@ -560,9 +519,8 @@ arrow::Status ReadAndWritePartitionedDatasets()
 arrow::Status add1(arrow::compute::KernelContext* ctx, const arrow::compute::ExecSpan& exec_span, arrow::compute::ExecResult* res)
 {
     //get argument columns
-    std::shared_ptr<arrow::Array> r1,r2;
-    r1 = exec_span[0].array.ToArray();
-    r2 = exec_span[1].array.ToArray();
+    S(arrow::Array,r1) = exec_span[0].array.ToArray();
+    S(arrow::Array,r2) = exec_span[1].array.ToArray();
     
     //iterate & write back sum of operands
     int32_t* out_data = res->array_span_mutable()->GetValues<int32_t>(1); //not so sure why array of underlying type however doesnt work with arrow types
@@ -577,71 +535,6 @@ arrow::Status add1(arrow::compute::KernelContext* ctx, const arrow::compute::Exe
     return arrow::Status::OK();
 }
 
-class CustomSumKernelState: public arrow::compute::KernelState
-{
-public:
-    // executing the kernel implementation, in this case its a summation
-    // ctx not important, batch holds array datas or scalars over which the sum agg shall be exec.
-    // lets assume arrays only
-    arrow::Status execSummation(arrow::compute::KernelContext*, const arrow::compute::ExecSpan& execSpan)
-    {
-        //partially taken from internal impl
-        // note: assumes array data stored as regular c array
-        //  doesnt work if it has to work with arrow-arrays which contain null-values (cuz they are stored more compact) 
-        const arrow::ArraySpan* arrData = &execSpan[0].array;
-        // assumption: elem 0 refers to null-array where set bits indicate if the elem is null
-        const int32_t* values = arrData->GetValues<int32_t>(1);
-        int arr[8] = {};
-
-        for(int64_t i = 0; i < arrData->length;i+=8)
-        {
-            #pragma unroll 
-            for(int j=0;j<8;j++){
-                arr[j]+=values[i+j];
-            }
-
-            //sum+=values[i];
-        }
-        for(int j=0;j<8;j++){
-            sum+=arr[j];
-        }
-        return arrow::Status::OK();
-    }
-    
-    // merging this state with another state
-    arrow::Status merge(arrow::compute::KernelContext*, arrow::compute::KernelState&& src)
-    {   
-        const CustomSumKernelState& other = static_cast<const CustomSumKernelState&>(src);
-        this->sum += other.sum;
-        return arrow::Status::OK();
-    }
-
-    // retrieving the execution results from the state
-    arrow::Status output(arrow::compute::KernelContext*, arrow::Datum* datum)
-    {
-        datum->value = std::make_shared<arrow::Int64Scalar>(sum);
-        return arrow::Status::OK();
-    }
-
-private:
-    int64_t sum = 0;
-};
-
-arrow::Status consumeSum(arrow::compute::KernelContext* ctx, const arrow::compute::ExecSpan& execSpan)
-{
-    //consume aaaa
-    return static_cast<CustomSumKernelState*>(ctx->state())->execSummation(ctx,execSpan);
-}
-arrow::Status mergeSum(arrow::compute::KernelContext* ctx, arrow::compute::KernelState&& src, arrow::compute::KernelState* dst)
-{
-    //merge
-    return static_cast<CustomSumKernelState*>(dst)->merge(ctx,std::move(src));
-}
-arrow::Status finalizeSum(arrow::compute::KernelContext* ctx, arrow::Datum* out)
-{
-    //finalize
-    return static_cast<CustomSumKernelState*>(ctx->state())->output(ctx,out);
-}
 
 
 arrow::Status CustomCompute()
@@ -650,18 +543,14 @@ arrow::Status CustomCompute()
     arrow::Int32Builder i32b;
     int32_t n1_raw[5] = {42,24,666,111,9876};
     int32_t n2_raw[5] = {4,1999,2023,777,6};
-    std::shared_ptr<arrow::Array> n1,n2;
     ARROW_RETURN_NOT_OK(i32b.AppendValues(n1_raw,5));
-    ARROW_ASSIGN_OR_RAISE(n1, i32b.Finish());
+    ARROW_ASSIGN_OR_RAISE(S(arrow::Array,n1), i32b.Finish());
     ARROW_RETURN_NOT_OK(i32b.AppendValues(n2_raw,5));
-    ARROW_ASSIGN_OR_RAISE(n2, i32b.Finish());
-    std::shared_ptr<arrow::Field> field_n1,field_n2;
-    std::shared_ptr<arrow::Schema> schema;
-    field_n1 = arrow::field("n1",arrow::int32());
-    field_n2 = arrow::field("n2",arrow::int32());
-    schema = arrow::schema({field_n1,field_n2});
-    std::shared_ptr<arrow::Table> table;
-    table = arrow::Table::Make(schema,{n1,n2},5);
+    ARROW_ASSIGN_OR_RAISE(S(arrow::Array,n2), i32b.Finish());
+    S(arrow::Field,field_n1) = arrow::field("n1",arrow::int32());
+    S(arrow::Field,field_n2) = arrow::field("n2",arrow::int32());
+    S(arrow::Schema,schema) = arrow::schema({field_n1,field_n2});
+    S(arrow::Table,table) = arrow::Table::Make(schema,{n1,n2},5);
 
     //there are fix functions, where can i find them? - in the compute ns arrow::compute::<funcName>
     //default use case: see ComputeStuff()
@@ -671,9 +560,8 @@ arrow::Status CustomCompute()
     arrow::Datum compute_res;
     // min_max computes both and saves them in an struct with two elements
     ARROW_ASSIGN_OR_RAISE(compute_res,arrow::compute::CallFunction("min_max",{n1},&compute_options));
-    std::shared_ptr<arrow::Scalar> min_value,max_value;
-    min_value = compute_res.scalar_as<arrow::StructScalar>().value[0];
-    max_value = compute_res.scalar_as<arrow::StructScalar>().value[1];
+    S(arrow::Scalar,min_value) = compute_res.scalar_as<arrow::StructScalar>().value[0];
+    S(arrow::Scalar,max_value) = compute_res.scalar_as<arrow::StructScalar>().value[1];
 
     //input value will be casted to common type e.g. (int32 and uint16) -> both int32
     // if implicit cast not supported: TypeError status
@@ -759,37 +647,42 @@ arrow::Status CustomCompute()
     // 5. add implementation to Function subclasses via AddKernel(..) with a corresponding Kernel, e.g. ScalarFunction needs ScalarKernel 
     // 6. Kernel subclasses are type specific function implementations, pass in fct ptr to own behavior on construction
     // 7. now call CallFunction as usually
+    // update: the registries do not have methods for removing functions, so heap allocated function objects are required
+    //  for testing purpose, using a local functionregistry
 
     // e.g. building the built-in functions for (element wise) add and aggregate add 
     //  only use them inside this fct
     //  declare common vars:
     arrow::compute::InputType input_type(arrow::int32());
     arrow::compute::OutputType output_type(arrow::int32());
-    arrow::compute::FunctionRegistry* global_reg = arrow::compute::GetFunctionRegistry();
+    S(arrow::compute::FunctionExecutor,e);
+    U(arrow::compute::FunctionRegistry,funcReg) = arrow::compute::FunctionRegistry::Make(arrow::compute::GetFunctionRegistry());
     arrow::Datum call_res;
     //  1. element wise add:
     //   ScalarKernel takes a fct ptr, fct will be called once containing the columns and expecting the fct to write values back to given param,
     //   ScalarKernel creates result column of same size as given columns so fct just needs to write values  
     //   - register stuff:
-    std::shared_ptr<arrow::compute::ScalarFunction> add_elem_doc(
-        new arrow::compute::ScalarFunction("add_elemwise", 
-            arrow::compute::Arity::Binary() , 
-            arrow::compute::FunctionDoc("add elementwise","custom function simulating add",{"o1","o2"})
-    ));
+    M(arrow::compute::ScalarFunction,add_elem_doc,(
+        "add_elemwise",
+        arrow::compute::Arity::Binary() , 
+        arrow::compute::FunctionDoc("add elementwise","custom function simulating add",{"o1","o2"})));
     arrow::compute::ScalarKernel addElem({input_type,input_type},output_type,&add1);
     ARROW_RETURN_NOT_OK(add_elem_doc->AddKernel(addElem));
-    ARROW_RETURN_NOT_OK(global_reg->AddFunction(add_elem_doc));
+    ARROW_RETURN_NOT_OK(funcReg->AddFunction(add_elem_doc));
     //   - call stuff:
-    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("add_elemwise",{n1,n2}));
+    ARROW_ASSIGN_OR_RAISE(e, arrow::compute::GetFunctionExecutor("add_elemwise",{n1,n2},NULLPTR,funcReg.get()));
+    ARROW_ASSIGN_OR_RAISE(call_res,e->Execute({n1,n2}));
+    //ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("add_elemwise",{n1,n2}));
     std::cout<<"res add_elemwise Datum is of kind '"
         <<call_res.ToString()
         <<"' and type of content '"
         <<call_res.type()->ToString()<<"'"
         <<std::endl;
-    std::shared_ptr<arrow::ArrayData> ad = call_res.array();
+    S(arrow::ArrayData,ad) = call_res.array();
     arrow::NumericArray<arrow::Int32Type> ar(ad);
     std::cout<<"res custom elem wise add:"<<ar.ToString()<<std::endl;
     arrow::Datum call_res_;
+    
     ARROW_ASSIGN_OR_RAISE(call_res_, arrow::compute::CallFunction("add",{table->GetColumnByName("n1"),table->GetColumnByName("n2")}));
     std::cout<<"res built-in elem wise add:"<<call_res_.chunked_array()->ToString()<<std::endl;
     //  2. aggregate add:
@@ -804,28 +697,31 @@ arrow::Status CustomCompute()
     //    merge: ScalarAggregateMerge = Status (*)(KernelContext*, KernelState&&, KernelState*);
     //    finalize: ScalarAggregateFinalize = Status (*)(KernelContext*, Datum*);
     //   - register stuff:
-    std::shared_ptr<arrow::compute::ScalarAggregateFunction> add_agg_doc(
-        new arrow::compute::ScalarAggregateFunction("add_agg",
-            arrow::compute::Arity::Unary(),
-            arrow::compute::FunctionDoc("add aggregate","custom function simulation aggregate add",{"column"})
-    ));
-    std::function<arrow::Result<std::unique_ptr<arrow::compute::KernelState>>(arrow::compute::KernelContext*, const arrow::compute::KernelInitArgs&)> i = [](arrow::compute::KernelContext*, const arrow::compute::KernelInitArgs&)
-    {
-        // init
-        return arrow::Result(std::unique_ptr<arrow::compute::KernelState>(new CustomSumKernelState));
-    };
-    arrow::compute::ScalarAggregateKernel addAgg({input_type},output_type,i,consumeSum,mergeSum,finalizeSum,false);
+    M(arrow::compute::ScalarAggregateFunction,add_agg_doc,(
+        "add_agg",
+        arrow::compute::Arity::Unary(),
+        arrow::compute::FunctionDoc("add aggregate","custom function simulation aggregate add",{"column"})));
+    arrow::compute::ScalarAggregateKernel addAgg({input_type},
+        output_type,
+        initK<CustomSumKernelState>,
+        consumeK<CustomSumKernelState>,
+        mergeK<CustomSumKernelState>,
+        finalizeK<CustomSumKernelState>,false);
     ARROW_RETURN_NOT_OK(add_agg_doc->AddKernel(addAgg));
-    ARROW_RETURN_NOT_OK(global_reg->AddFunction(add_agg_doc));
+    ARROW_RETURN_NOT_OK(funcReg->AddFunction(add_agg_doc));
     //   - call stuff:
-    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("add_agg",{n1}));
+    ARROW_ASSIGN_OR_RAISE(e, arrow::compute::GetFunctionExecutor("add_agg",{n1},NULLPTR,funcReg.get()));
+    ARROW_ASSIGN_OR_RAISE(call_res,e->Execute({n1}));
+    //ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("add_agg",{n1}));
     std::cout<<"sum of custom column n1 Datum is of kind'"
         <<call_res.ToString()
         <<"' and type of content '"
         <<call_res.type()->ToString()<<"'"
         <<std::endl;
     std::cout<<"custom sum n1:"<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
-    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("add_agg",{n2}));
+    ARROW_ASSIGN_OR_RAISE(e, arrow::compute::GetFunctionExecutor("add_agg",{n2},NULLPTR,funcReg.get()));
+    ARROW_ASSIGN_OR_RAISE(call_res,e->Execute({n2}));
+    //ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("add_agg",{n2}));
     std::cout<<"custom sum n2:"<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
     //   - compare with built in agg sum fct results:
     ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum",{n1}));
@@ -836,119 +732,9 @@ arrow::Status CustomCompute()
     return arrow::Status::OK();
 }
 
-arrow::Status someTesting()
-{
-    //1. create random data
-    //2. save data in ipc (binary) format
-    //3. read data from file
-    //4. register custom functions
-    //5. exec built in fct and measure time
-    //6. exec custom fct and measure time
-
-    // also measuring time for all tasks
-    std::chrono::high_resolution_clock::time_point start; 
-    std::string diff;
-    //func for retrtrieving execution time from start start
-    auto getTime = [&start](){
-        auto diff = std::chrono::high_resolution_clock::now() - start;
-        std::stringstream ss;
-        // 1s = 10^6 microseconds
-        ss<<"seconds: "<<std::chrono::duration_cast<std::chrono::seconds>(diff).count()
-        <<" or micros.: "<<std::chrono::duration_cast<std::chrono::microseconds>(diff).count();
-        return ss.str();
-    };
-
-
-    // 1.:
-    start = std::chrono::high_resolution_clock::now();
-    const int elems = 500000000;
-    const int max = 100;
-    
-    arrow::Int32Builder i32B;
-    for(int i=0; i < elems; i++){ARROW_RETURN_NOT_OK(i32B.Append(rand() % max + 1));}
-    std::shared_ptr<arrow::Array> nums;
-    ARROW_ASSIGN_OR_RAISE(nums,i32B.Finish());
-
-    std::shared_ptr<arrow::Field> field_nums;
-    std::shared_ptr<arrow::Schema> schema;
-    field_nums = arrow::field("numbers",arrow::int32()); //create(copy) field via ns function
-    schema = arrow::schema({field_nums}); //a date(rec) schema, or: a table entry
-    std::shared_ptr<arrow::Table> table;
-    table = arrow::Table::Make(schema,{nums});
-    std::cout<<"data generation took: "<<getTime()<<std::endl;
-    
-    // 2.:
-    start = std::chrono::high_resolution_clock::now();
-    std::shared_ptr<arrow::io::FileOutputStream> outfile;
-    ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open("nums.arrow"));
-    ARROW_ASSIGN_OR_RAISE(std::shared_ptr<arrow::ipc::RecordBatchWriter> ipc_writer,arrow::ipc::MakeFileWriter(outfile, schema));
-    ARROW_RETURN_NOT_OK(ipc_writer->WriteTable(*table));
-    ARROW_RETURN_NOT_OK(ipc_writer->Close());
-    std::cout<<"writing table took: "<<getTime()<<std::endl;
-
-    // 3.:
-    start = std::chrono::high_resolution_clock::now();
-    std::shared_ptr<arrow::io::ReadableFile> inFile;
-    ARROW_ASSIGN_OR_RAISE(inFile, arrow::io::ReadableFile::Open("nums.arrow",arrow::default_memory_pool()));
-    
-    std::shared_ptr<arrow::ipc::RecordBatchFileReader> ipc_reader;
-    ARROW_ASSIGN_OR_RAISE(ipc_reader,arrow::ipc::RecordBatchFileReader::Open(inFile));
-    std::shared_ptr<arrow::RecordBatch> recordbatch;
-    std::vector<std::shared_ptr<arrow::RecordBatch>> recordbatches;
-    for(int i=0; i< ipc_reader->num_record_batches();i++){
-        ARROW_ASSIGN_OR_RAISE(recordbatch, ipc_reader->ReadRecordBatch(0)); //there can be many 
-        recordbatches.push_back(recordbatch);
-    }
-    std::shared_ptr<arrow::Table> table2;
-    ARROW_ASSIGN_OR_RAISE(table2,arrow::Table::FromRecordBatches(recordbatches));
-    std::cout<<"reading table took:"<<getTime()<<std::endl;
-
-    // 4.:
-    start = std::chrono::high_resolution_clock::now();
-    std::shared_ptr<arrow::compute::ScalarAggregateFunction> add_agg_doc(
-        new arrow::compute::ScalarAggregateFunction("sum_custom",
-            arrow::compute::Arity::Unary(),
-            arrow::compute::FunctionDoc("sum custom","custom function simulation aggregate add",{"column"})
-    ));
-    std::function<arrow::Result<std::unique_ptr<arrow::compute::KernelState>>(arrow::compute::KernelContext*, const arrow::compute::KernelInitArgs&)> i = [](arrow::compute::KernelContext*, const arrow::compute::KernelInitArgs&)
-    {
-        // init
-        return arrow::Result(std::unique_ptr<arrow::compute::KernelState>(new CustomSumKernelState));
-    };
-    arrow::compute::ScalarAggregateKernel addAgg({arrow::int32()},arrow::int32(),i,consumeSum,mergeSum,finalizeSum,false);
-    ARROW_RETURN_NOT_OK(add_agg_doc->AddKernel(addAgg));
-    ARROW_RETURN_NOT_OK(arrow::compute::GetFunctionRegistry()->AddFunction(add_agg_doc));
-    std::cout<<"custom function init took: "<<getTime()<<std::endl;
-    
-
-    // 5.:
-    std::cout<<"start measuring"<<std::endl;
-    arrow::Datum call_res;
-    for(int i=0; i< 30; i++){
-    start = std::chrono::high_resolution_clock::now();
-    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum",{table2->GetColumnByName("numbers")}));
-    diff = getTime();
-    std::cout<<"built-in sum res: "<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
-    
-    std::cout<<"built-in sum exec time: "<<diff<<std::endl;
-    
-    // 6.:
-    start = std::chrono::high_resolution_clock::now();
-    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum_custom",{table2->GetColumnByName("numbers")}));
-    diff = getTime();
-    std::cout<<"custom sum nums:"<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
-    
-    std::cout<<"custom sum exec time: "<<diff<<std::endl;
-    }
-
-    return arrow::Status::OK();
-}
-
-
 arrow::Status RunMain()
 {
     //tutorial stuff
-    //
     ARROW_RETURN_NOT_OK(GenInitialFile());
     ARROW_RETURN_NOT_OK(ReadAndWriteStuff());
     ARROW_RETURN_NOT_OK(ComputeStuff());
@@ -956,8 +742,6 @@ arrow::Status RunMain()
     ARROW_RETURN_NOT_OK(ReadAndWritePartitionedDatasets());
     //custom compute stuff
     ARROW_RETURN_NOT_OK(CustomCompute());
-    //some performance testing
-    ARROW_RETURN_NOT_OK(someTesting());
     return arrow::Status::OK();
 }
 
