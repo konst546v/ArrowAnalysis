@@ -6,6 +6,14 @@
 #include <parquet/arrow/reader.h>
 #include <parquet/arrow/writer.h>
 #include <arrow/compute/api.h>
+//its unclear if gandiva has an general api
+#include <gandiva/node.h>
+#include <gandiva/condition.h>
+#include <gandiva/expression.h>
+#include <gandiva/tree_expr_builder.h>
+#include <gandiva/projector.h>
+#include <gandiva/filter.h>
+
 
 #include <unistd.h>
 #include <iostream>
@@ -209,6 +217,14 @@ arrow::Status ReadAndWriteStuff()
     return arrow::Status::OK();
 }
 
+//macro for faster typing of shared ptr instantiation
+#define S(t,n)\
+    std::shared_ptr<t> n
+
+//macro for faster typing of shared ptr creation
+#define M(t,n,a)\
+    S(t,n) = std::make_shared<t>(t a);
+
 arrow::Status ComputeStuff()
 {
     //create some a table with two columns each 5 rows
@@ -267,7 +283,7 @@ arrow::Status ComputeStuff()
     index_options.value = arrow::MakeScalar(666);
     // search for "666" in column n1 via calling the generic compute function callFunction
     ARROW_ASSIGN_OR_RAISE(res,arrow::compute::CallFunction("index",{table->GetColumnByName("n1")},&index_options));
-    // get results
+    
     // print res type s
     std::cout<<"res Datum is of kind'"
         <<sum_elem_wise.ToString()
@@ -277,6 +293,135 @@ arrow::Status ComputeStuff()
     // print res content, which will be an zero based index into n1
     std::cout<<res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
 
+    // count distinct:
+    ARROW_ASSIGN_OR_RAISE(res,arrow::compute::CallFunction("count_distinct",{table->GetColumnByName("n1")}));
+    std::cout<<"amount of distinct numbers in n1:"<<res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
+
+    // filter:  
+    // - built-in "filter" or "array_filter" can filter elements of a row via array of boolean which might not be the inital idea 
+    // - built-in "greater" or .. functions only opperate on a single datum
+    /*arrow::compute::FilterOptions filter_options;
+    ARROW_ASSIGN_OR_RAISE(res,arrow::compute::CallFunction("filter",{n1,bools},&filter_options));
+    */
+    
+    // "select * from table where n2 > 1000":
+    
+    //  v1: use dataset scanner:
+    //   - expression and scanner creation:
+    auto dataset = std::make_shared<arrow::dataset::InMemoryDataset>(table);
+    auto scanOptions = std::make_shared<arrow::dataset::ScanOptions>();
+    scanOptions->filter = 
+        arrow::compute::greater(arrow::compute::field_ref("n2"),arrow::compute::literal(1000));
+    auto scanner = arrow::dataset::ScannerBuilder(dataset,scanOptions).Finish();
+    //   - scanner execution:
+    ARROW_ASSIGN_OR_RAISE(res,scanner.ValueUnsafe()->ToTable());
+    auto filteredTable = res.table();
+    std::cout << "filtered table via dataset: "<< std::endl << filteredTable->ToString() << std::endl;
+    
+    //  v2: use gandiva expression compiler:
+    //   - expression creation:
+    //   note: only works on record batches, not on tables
+    S(arrow::RecordBatch,data_rb) =
+        arrow::RecordBatch::Make(schema,n2->length(),{n1,n2});
+    S(gandiva::Node,gNField_n2) = gandiva::TreeExprBuilder::MakeField(field_n2);
+    S(gandiva::Node,gNLiteral) = gandiva::TreeExprBuilder::MakeLiteral(1000);
+    S(gandiva::Node,gNCond) = 
+        gandiva::TreeExprBuilder::MakeFunction("greater_than",{gNField_n2,gNLiteral},arrow::boolean());
+    S(gandiva::Condition,gCond) =
+        gandiva::TreeExprBuilder::MakeCondition(gNCond); //its the good night condition, what else?
+    //   - filter creation and execution:
+    S(gandiva::Filter,f);
+    ARROW_RETURN_NOT_OK(gandiva::Filter::Make(schema,gCond, &f));
+    S(gandiva::SelectionVector, res_idxs);
+    ARROW_RETURN_NOT_OK(gandiva::SelectionVector::MakeInt16(data_rb->num_rows(),
+        arrow::default_memory_pool(),&res_idxs));
+    ARROW_RETURN_NOT_OK(f->Evaluate(*data_rb,res_idxs));
+    //   - filter result evaluation:
+    S(arrow::Array,idxs) = res_idxs->ToArray();
+    arrow::Datum r; ARROW_ASSIGN_OR_RAISE(r, 
+        arrow::compute::Take(arrow::Datum(data_rb),arrow::Datum(idxs),arrow::compute::TakeOptions::NoBoundsCheck()));
+    std::cout<<" filtered table via gandiva: "<<std::endl<<r.record_batch()->ToString()<<std::endl;
+    
+    return arrow::Status::OK();
+}
+
+arrow::Status GandivaStuff(){
+    // create a column
+    arrow::Int32Builder i32b;
+    int32_t n2_raw[5] = {1,2,3,4,5};
+    S(arrow::Array,n2);
+    ARROW_RETURN_NOT_OK(i32b.AppendValues(n2_raw,5));
+    ARROW_ASSIGN_OR_RAISE(n2, i32b.Finish());
+    S(arrow::Field,field_n2);
+    S(arrow::Schema, schema);
+    field_n2 = arrow::field("n2",arrow::int32());
+    
+    //  1. expr tree creation:
+    S(gandiva::Node,gNField_n2) = gandiva::TreeExprBuilder::MakeField(field_n2);
+    S(gandiva::Node,gNLiteral) = gandiva::TreeExprBuilder::MakeLiteral(2);
+    S(arrow::Field,field_res)=arrow::field("result",arrow::int32());
+    S(gandiva::Node,gNAdd) = 
+        gandiva::TreeExprBuilder::MakeFunction("add",{gNField_n2,gNLiteral},arrow::int32());
+    S(gandiva::Expression,gNExpr) =
+        gandiva::TreeExprBuilder::MakeExpression(gNAdd,field_res);
+    S(gandiva::Node,gNCond) = 
+        gandiva::TreeExprBuilder::MakeFunction("greater_than",{gNField_n2,gNLiteral},arrow::boolean());
+    S(gandiva::Condition,gCond) =
+        gandiva::TreeExprBuilder::MakeCondition(gNCond); //its the good night condition, what else?
+    // retrieve available function names via gandiva::GetRegisteredFunctionSignatures()
+
+    //  2. processors for nodes:
+    //   projector: copies data 
+    //   filter: saves data refs (as idx-vector)
+    M(arrow::Schema,input_schema,({field_n2}))
+    M(arrow::Schema,output_schema,({field_res}))
+    S(gandiva::Projector,p);
+    arrow::Status s;
+    std::vector<std::shared_ptr<gandiva::Expression>> es = {gNExpr};
+    s = gandiva::Projector::Make(input_schema,es,&p);
+    ARROW_RETURN_NOT_OK(s);
+
+    S(gandiva::Filter,f);
+    s = gandiva::Filter::Make(input_schema,gCond, &f);
+    ARROW_RETURN_NOT_OK(s);
+    //  3. executing projection / filtering
+    S(arrow::RecordBatch,ins) =
+        arrow::RecordBatch::Make(input_schema,n2->length(),{n2});
+    arrow::ArrayVector outs;
+    s = p->Evaluate(*ins,arrow::default_memory_pool(),&outs);
+    ARROW_RETURN_NOT_OK(s);
+    S(arrow::RecordBatch,outs_rb) =
+        arrow::RecordBatch::Make(output_schema,outs[0]->length(),outs);
+    
+    std::cout<<" gandiva projection only returns: "<<std::endl<<outs_rb->ToString()<<std::endl;
+    // = 3,4,5,6,7
+
+    S(gandiva::SelectionVector, res_idxs);
+    s = gandiva::SelectionVector::MakeInt16(ins->num_rows(),arrow::default_memory_pool(),&res_idxs);
+    ARROW_RETURN_NOT_OK(s);
+    s = f->Evaluate(*ins,res_idxs);
+    ARROW_RETURN_NOT_OK(s);
+    S(arrow::Array,idxs) = res_idxs->ToArray();
+    //  use custom fct to retrieve elements from idxs 
+    arrow::Datum bla; ARROW_ASSIGN_OR_RAISE(bla, 
+        arrow::compute::Take(arrow::Datum(ins),arrow::Datum(idxs),arrow::compute::TakeOptions::NoBoundsCheck()));
+    outs_rb = bla.record_batch();
+    
+    std::cout<<" gandiva filtering only returns: "<<std::endl<<outs_rb->ToString()<<std::endl;
+    // = 3,4,5
+
+    //  4. chaining the executions (this should be used instead of 3 if sql smth like see beliow)
+    //  select l.n1 + 2 from (select <c> n1 from <table> where <c> > 2) l  
+    //   configure projector to take filtered input
+    s = gandiva::Projector::Make(input_schema,es,res_idxs->GetMode(),gandiva::ConfigurationBuilder::DefaultConfiguration(),&p);
+    ARROW_RETURN_NOT_OK(s);
+    s = p->Evaluate(*ins,res_idxs.get(),arrow::default_memory_pool(),&outs);
+    ARROW_RETURN_NOT_OK(s);
+    outs_rb = arrow::RecordBatch::Make(output_schema,outs[0]->length(),outs);
+
+    std::cout<<" gandiva filtering; projection; returns: "<<std::endl<<outs_rb->ToString()<<std::endl;
+    // = 5,6,7
+    
     return arrow::Status::OK();
 }
 
@@ -446,9 +591,19 @@ public:
         const arrow::ArraySpan* arrData = &execSpan[0].array;
         // assumption: elem 0 refers to null-array where set bits indicate if the elem is null
         const int32_t* values = arrData->GetValues<int32_t>(1);
-        for(int64_t i = 0; i < arrData->length;i++)
+        int arr[8] = {};
+
+        for(int64_t i = 0; i < arrData->length;i+=8)
         {
-            sum+=values[i];
+            #pragma unroll 
+            for(int j=0;j<8;j++){
+                arr[j]+=values[i+j];
+            }
+
+            //sum+=values[i];
+        }
+        for(int j=0;j<8;j++){
+            sum+=arr[j];
         }
         return arrow::Status::OK();
     }
@@ -659,7 +814,7 @@ arrow::Status CustomCompute()
         // init
         return arrow::Result(std::unique_ptr<arrow::compute::KernelState>(new CustomSumKernelState));
     };
-    arrow::compute::ScalarAggregateKernel addAgg({input_type},output_type,i,consumeSum,mergeSum,finalizeSum);
+    arrow::compute::ScalarAggregateKernel addAgg({input_type},output_type,i,consumeSum,mergeSum,finalizeSum,false);
     ARROW_RETURN_NOT_OK(add_agg_doc->AddKernel(addAgg));
     ARROW_RETURN_NOT_OK(global_reg->AddFunction(add_agg_doc));
     //   - call stuff:
@@ -706,9 +861,9 @@ arrow::Status someTesting()
 
     // 1.:
     start = std::chrono::high_resolution_clock::now();
-    const int elems = 50000000;
+    const int elems = 500000000;
     const int max = 100;
-    srand(time(NULL));
+    
     arrow::Int32Builder i32B;
     for(int i=0; i < elems; i++){ARROW_RETURN_NOT_OK(i32B.Append(rand() % max + 1));}
     std::shared_ptr<arrow::Array> nums;
@@ -760,7 +915,7 @@ arrow::Status someTesting()
         // init
         return arrow::Result(std::unique_ptr<arrow::compute::KernelState>(new CustomSumKernelState));
     };
-    arrow::compute::ScalarAggregateKernel addAgg({arrow::int32()},arrow::int32(),i,consumeSum,mergeSum,finalizeSum);
+    arrow::compute::ScalarAggregateKernel addAgg({arrow::int32()},arrow::int32(),i,consumeSum,mergeSum,finalizeSum,false);
     ARROW_RETURN_NOT_OK(add_agg_doc->AddKernel(addAgg));
     ARROW_RETURN_NOT_OK(arrow::compute::GetFunctionRegistry()->AddFunction(add_agg_doc));
     std::cout<<"custom function init took: "<<getTime()<<std::endl;
@@ -769,7 +924,7 @@ arrow::Status someTesting()
     // 5.:
     std::cout<<"start measuring"<<std::endl;
     arrow::Datum call_res;
-    
+    for(int i=0; i< 30; i++){
     start = std::chrono::high_resolution_clock::now();
     ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum",{table2->GetColumnByName("numbers")}));
     diff = getTime();
@@ -784,6 +939,7 @@ arrow::Status someTesting()
     std::cout<<"custom sum nums:"<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
     
     std::cout<<"custom sum exec time: "<<diff<<std::endl;
+    }
 
     return arrow::Status::OK();
 }
@@ -796,6 +952,7 @@ arrow::Status RunMain()
     ARROW_RETURN_NOT_OK(GenInitialFile());
     ARROW_RETURN_NOT_OK(ReadAndWriteStuff());
     ARROW_RETURN_NOT_OK(ComputeStuff());
+    ARROW_RETURN_NOT_OK(GandivaStuff());
     ARROW_RETURN_NOT_OK(ReadAndWritePartitionedDatasets());
     //custom compute stuff
     ARROW_RETURN_NOT_OK(CustomCompute());

@@ -3,13 +3,19 @@ cmake_minimum_required(VERSION 3.16)
 project(ArrowTesting)
 # do not optimize on debug, but use high optimisation otherwise
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native")
+#set(CMAKE_VERBOSE_MAKEFILE TRUE)
+find_package(Gandiva REQUIRED)
+
 find_package(Arrow REQUIRED)
 # the apache arrow pkg
 find_package(Parquet REQUIRED)
 # the pkg for writing and parsing .parquet files
 find_package(ArrowDataset REQUIRED)
 # the pkg for reading and writing datasets
+
+# the pkg for creating compute expressions and executing them
+#  - also needs 
 # more info: https://arrow.apache.org/docs/cpp/build_system.html
 # ${Arrow_FOUND} true if lib has been found
 # ${ARROW_VERSION} contains arrow version
@@ -19,3 +25,4 @@ add_executable(arrow_testing arrow_testing.cpp) # compile and make exe
 target_link_libraries(arrow_testing PRIVATE Arrow::arrow_shared) # link found arrow lib
 target_link_libraries(arrow_testing PRIVATE Parquet::parquet_shared) # link found parquet lib
 target_link_libraries(arrow_testing PRIVATE ArrowDataset::arrow_dataset_shared) # link found arrow dataset lib
+target_link_libraries(arrow_testing PRIVATE Gandiva::gandiva_shared)
