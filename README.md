@@ -37,8 +37,25 @@ execute `measure.sh`
     * using a vectorized user defined sum function (`o` or `custom vectorized`)
 * sum will be calculated over a column which has a size of multiples of 16KB, from 16KB to 8 MB
 * 50 measurements for each setup 
+## Sources:
+`arrow_testing.cpp`: contains example code from the arrow documentation and some snippets on how to create user defined functions, including:
+* creating arrow ds e.g. arrays and tables
+* reading and writing from/to different file formats (arrow/csv/parquet)
+* using the dataset,gandiva and compute api
+* adding user defined element wise and aggregation compute functions
 
+`arrow_eval.cpp`: contains code for evaluating arrow compute functions. The program takes arguments `size` (table size in KB) and `measurements`(amount of runs) and does the following:
+1. creates arrow table of given size with a column containing random data
+2. saves table as `./build/nums.arrow`
+3. reads the table
+4. registers two user defined functions which both calculate the aggregated sum of a column. One with, the other without vectorized loop
+5. calculates the sum of the column using the built in arrow compute sum function.
+6. calculates the sum of the column using the non vectorized user defined function.
+7. calculates the sum of the column using the vectorized user defined function.
+* all calculations will be measured and executed multiple times, theres a parameter for the amount of calculations.
+9. creates file `./build/measurements_<size>_<measurements>.json` containing all measurements (filename contains arguments).
 
+`arrow_custom_kernel.cpp`: contains code for user defined aggregation sum function, as well as some helper macros.
 
 
 
