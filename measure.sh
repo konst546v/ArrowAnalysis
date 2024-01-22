@@ -5,7 +5,8 @@ SIZE=16
 # measurements each run
 MEASURES=50
 echo "start measuring"
-while [ $SIZE -le 512 ]
+# from 16KB to 8MB
+while [ $SIZE -le 8192 ]
 do
     ./build/arrow_eval $SIZE $MEASURES
     if [ $? -eq 1 ]; then 
