@@ -116,15 +116,7 @@ arrow::Status someTesting(int size,int measures)
     S(arrow::compute::FunctionExecutor,e);
     // custom optimized and builtin times
     std::vector<int64_t> c,o,b; 
-    // 5.:
-    std::cout<<"start measuring"<<std::endl;
-    for(int i=0; i< measures; i++){
-        start = std::chrono::high_resolution_clock::now();
-        ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum",{table2->GetColumnByName("numbers")}));
-        b.push_back(getTime());
-        std::cout<<"built-in sum res: "<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
-        std::cout<<"built-in sum exec time: "<<b.back()<<"ns"<<std::endl;
-    }
+    
     // 6.:
     for(int i=0; i< measures; i++){
         ARROW_ASSIGN_OR_RAISE(e,
@@ -146,6 +138,15 @@ arrow::Status someTesting(int size,int measures)
         o.push_back(getTime());
         std::cout<<"opt. custom sum res: "<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
         std::cout<<"opt. custom sum exec time: "<<o.back()<<"ns"<<std::endl;
+    }
+    // 5.:
+    std::cout<<"start measuring"<<std::endl;
+    for(int i=0; i< measures; i++){
+        start = std::chrono::high_resolution_clock::now();
+        ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum",{table2->GetColumnByName("numbers")}));
+        b.push_back(getTime());
+        std::cout<<"built-in sum res: "<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
+        std::cout<<"built-in sum exec time: "<<b.back()<<"ns"<<std::endl;
     }
     // 8.:
     std::stringstream ss;

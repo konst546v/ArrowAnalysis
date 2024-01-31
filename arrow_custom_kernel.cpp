@@ -12,6 +12,11 @@
 #define M(t,n,a)\
     S(t,n) = std::make_shared<t>(t a);
 
+
+
+//#pragma GCC push_options
+//#pragma GCC optimize("O0")
+
 // custom sum aggregate kernel 
 class CustomSumKernelState: public arrow::compute::KernelState
 {
@@ -21,13 +26,14 @@ public:
     // lets assume arrays only
     arrow::Status consume(arrow::compute::KernelContext*, const arrow::compute::ExecSpan& execSpan)
     {
+
         //partially taken from internal impl
         // note: assumes array data stored as regular c array
         //  doesnt work if it has to work with arrow-arrays which contain null-values (cuz they are stored more compact) 
         const arrow::ArraySpan* arrData = &execSpan[0].array;
         // assumption: elem 0 refers to null-array where set bits indicate if the elem is null
         const int32_t* values = arrData->GetValues<int32_t>(1);
-        
+        #pragma GCC ivdep
         for(int64_t i = 0; i < arrData->length;i++)
         {
             sum+=values[i];
@@ -53,6 +59,7 @@ public:
 protected:
     long long sum = 0;
 };
+//#pragma GCC pop_options
 
 // (simd) optimized custom sum aggregate kernel
 #define REGSIZE 8
