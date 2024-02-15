@@ -15,14 +15,19 @@ if(length(args) < 3) {
 }
 # Read JSON data from the file
 plot_data <- fromJSON(args[1])
-c_vs <- as.numeric(plot_data$c)
-b_vs <- as.numeric(plot_data$b)
-o_vs <- as.numeric(plot_data$o)
-data <- list(builtin = b_vs, custom = c_vs, custom_o = o_vs)
-# path without extension but dot
-fb <- substring(args[1],first=1,last=nchar(args[1])-4)
+asc_vs <- as.numeric(plot_data$asc)
+asb_vs <- as.numeric(plot_data$asb)
+aso_vs <- as.numeric(plot_data$aso)
+esc_vs <- as.numeric(plot_data$esc)
+esb_vs <- as.numeric(plot_data$esb)
+
+# path without extension
+fb <- substring(args[1],first=1,last=nchar(args[1])-5)
+
+# -- aggregate sum --
+data <- list(builtin = asb_vs, custom = asc_vs, custom_o = aso_vs)
 # create boxplot, size scales textfont and so on
-pdf(paste0(fb,"pdf"),width=10,height=6)
+pdf(paste0(fb,"as.pdf"),width=10,height=6)
 # the outline mess up the graphics
 s<-2
 xs<-seq(from = 1, by = s, length.out = 4)
@@ -30,7 +35,7 @@ print(xs)
 bp<-boxplot(data, outline=FALSE,col = c("red","green","blue"), 
     xlim=c(0.5,xs[length(xs)]),at=xs[-length(xs)],
     names = c("builtin","custom","custom vectorized"),
-    main = paste0("custom vs builtin execution time for ",args[2],"KB and ",args[3]," measurements"),
+    main = paste0("aggregation sum function: custom vs builtin execution time for ",args[2],"KB and ",args[3]," measurements"),
     ylab = "nanoseconds")
 # visualize medians, calculate and visualize relative speedups
 median_b <- bp$stats[3,1]
@@ -60,5 +65,23 @@ mid_point <- function(idx){
 vis_speedup(median_c,median_b,mid_point(1))
 vis_speedup(median_o,median_b,mid_point(2))
 vis_speedup(median_c,median_o,mid_point(3))
-
 dev.off()
+
+# -- elemwise sum --
+data <- list(builtin = esb_vs, custom = esc_vs)
+pdf(paste0(fb,"es.pdf"),width=10,height=6)
+s<-2
+xs<-seq(from = 1.5, by = s, length.out = 3)
+print(xs)
+bp<-boxplot(data, outline=FALSE,col = c("red","green"), 
+    xlim=c(0.5,xs[length(xs)]),at=xs[-length(xs)],
+    names = c("builtin","custom"),
+    main = paste0("elementwise sum function: custom vs builtin execution time for ",args[2],"KB and ",args[3]," measurements"),
+    ylab = "nanoseconds")
+median_b <- bp$stats[3,1]
+median_c <- bp$stats[3,2]
+vis_point(xs[1],median_b)
+vis_point(xs[2],median_c)
+vis_speedup(median_c,median_b,mid_point(1))
+dev.off()
+

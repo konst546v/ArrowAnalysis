@@ -515,28 +515,6 @@ arrow::Status ReadAndWritePartitionedDatasets()
     return arrow::Status::OK();
 }
 
-// exec_span has input columns, res has the result column, all same size
-arrow::Status add1(arrow::compute::KernelContext* ctx, const arrow::compute::ExecSpan& exec_span, arrow::compute::ExecResult* res)
-{
-    //get argument columns
-    S(arrow::Array,r1) = exec_span[0].array.ToArray();
-    S(arrow::Array,r2) = exec_span[1].array.ToArray();
-    
-    //iterate & write back sum of operands
-    int32_t* out_data = res->array_span_mutable()->GetValues<int32_t>(1); //not so sure why array of underlying type however doesnt work with arrow types
-    for(int i = 0; i < exec_span.length; i++) 
-    {   
-        arrow::Datum o1,o2;
-        ARROW_ASSIGN_OR_RAISE(o1,r1->GetScalar(i));
-        ARROW_ASSIGN_OR_RAISE(o2,r2->GetScalar(i));
-        *out_data++ = o1.scalar_as<arrow::Int32Scalar>().value + o2.scalar_as<arrow::Int32Scalar>().value;
-    }
-
-    return arrow::Status::OK();
-}
-
-
-
 arrow::Status CustomCompute()
 {
     //create a table with two columns each 5 rows

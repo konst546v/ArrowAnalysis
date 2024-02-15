@@ -15,12 +15,12 @@ option(BUILD_EVAL "building arrow_eval" OFF)
 
 if(BUILD_EVAL)
     add_executable(arrow_eval arrow_eval.cpp) # compile and make exe
-    find_package(Arrow REQUIRED)
-    #target_link_libraries(arrow_testing PRIVATE Arrow::arrow_shared)
+    #link to pkg:
+    # find_package(Arrow REQUIRED)
+    # target_link_libraries(arrow_testing PRIVATE Arrow::arrow_shared)
     #link to built one, renamed in order to make sure the installed pkgs wont be used 
-    #target_link_libraries(arrow_eval -L/home/konst/git/arrow/cpp/build/release)
-    #target_link_libraries(arrow_eval -larrow16)
-    target_link_libraries(arrow_eval PRIVATE Arrow::arrow_shared)
+    target_link_libraries(arrow_eval -L/home/konst/git/arrow/cpp/build/release)
+    target_link_libraries(arrow_eval -larrow16)
 else()
     find_package(Arrow REQUIRED)
     find_package(Gandiva REQUIRED)
@@ -37,5 +37,3 @@ endif()
 # inside builddir:
 # cmake .. --preset ninja-release-minimal -DARROW_CXX_FLAGS_RELEASE=-O3 -DARROW_COMPUTE=ON -DCMAKE_INSTALL_PREFIX=/usr/lib/x86_64-linux-gnu
 # cmake --build .
-# libarrow-acero-dev libarrow-acero1500 libarrow-dataset-dev libarrow-dataset1500 libarrow-dev
-# libarrow1500 libgandiva-dev libgandiva1500 libparquet-dev libparquet1500

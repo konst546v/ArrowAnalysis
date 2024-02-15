@@ -28,10 +28,9 @@ public:
     {
 
         //partially taken from internal impl
-        // note: assumes array data stored as regular c array
-        //  doesnt work if it has to work with arrow-arrays which contain null-values (cuz they are stored more compact) 
         const arrow::ArraySpan* arrData = &execSpan[0].array;
         // assumption: elem 0 refers to null-array where set bits indicate if the elem is null
+        //TODO: why does this work if it has to work with arrow-arrays which contain null-values? 
         const int32_t* values = arrData->GetValues<int32_t>(1);
         #pragma GCC ivdep
         for(int64_t i = 0; i < arrData->length;i++)
@@ -91,6 +90,8 @@ public:
     }
 };
 
+
+
 //those functions do only exist to speed up typing
 // init Kernel
 // create kernel (impl)
@@ -117,4 +118,21 @@ template<typename KernelState>
 arrow::Status finalizeK(arrow::compute::KernelContext* ctx, arrow::Datum* out)
 {
     return static_cast<KernelState*>(ctx->state())->finalize(ctx,out);
+}
+
+// custom element wise add
+// exec_span has input columns, res has the result column, all same size
+arrow::Status add1(arrow::compute::KernelContext* ctx, const arrow::compute::ExecSpan& exec_span, arrow::compute::ExecResult* res)
+{
+    //get argument columns
+    const int32_t* r1 = exec_span[0].array.GetValues<int32_t>(1);
+    const int32_t* r2 = exec_span[1].array.GetValues<int32_t>(1);
+    //iterate & write back sum of operands
+    int32_t* out_data = res->array_span_mutable()->GetValues<int32_t>(1);
+    for(int i = 0; i < exec_span.length; i++) //length refers to array arg lengths 
+    {   
+        *out_data++ = *r1++ + *r2++; //deref before inc
+    }
+
+    return arrow::Status::OK();
 }
