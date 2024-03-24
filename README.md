@@ -15,6 +15,7 @@
     * Gandiva
 * Gandiva requires LLVM Project v17
 ## Usage:
+* cd into this projects dir
 * create makefile for testing/debugging arrow (`arrow_testing.cpp`):
 ```
 cmake -G'Unix Makefiles' -S . -B ./build -DCMAKE_BUILD_TYPE=Debug
@@ -31,11 +32,10 @@ make -C ./build
 execute `measure.sh`
 * runs `arrow_eval`, which generates measurements in the `./build` folder
 * visualizes the measurements generating boxplots with same name in the `./build` folder via executing `plot.r`
-* measurements include execution times of different sum aggregate functions:
+* measurements include execution times of different sum-functions:
     * using the built in arrow compute sum function(`b` or `builtin`)
     * using an user defined sum function (`c` or `custom`)
-    * using a vectorized user defined sum function (`o` or `custom vectorized`)
-* sum will be calculated over a column which has a size of multiples of 16KB, from 16KB to 8 MB
+* sum will be calculated over a column which has a size of multiples of 16KB, ranging from 16KB to 522 MB
 * 50 measurements for each setup 
 ## Sources:
 `arrow_testing.cpp`: contains example code from the arrow documentation and some snippets on how to create user defined functions, including:
@@ -48,8 +48,8 @@ execute `measure.sh`
 1. creates arrow table of given size with a column containing random data
 2. saves table as `./build/nums.arrow`
 3. reads the table
-4. registers two user defined functions which both calculate the aggregated sum of a column. One with, the other without vectorized loop
-5. calculates the sum of the column using the built in arrow compute sum function.
+4. registers two user defined functions which calculate the sum elementwise and as aggregation.
+5. calculates the aggregated sum of the column using the 
 6. calculates the sum of the column using the non vectorized user defined function.
 7. calculates the sum of the column using the vectorized user defined function.
 * all calculations will be measured and executed multiple times, theres a parameter for the amount of calculations.

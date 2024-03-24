@@ -17,19 +17,18 @@
 arrow::Status someTesting(int size,int measures)
 {
     //1. create random data
-    //2. save data in ipc (binary) format
+    //2. save data in feather format
     //3. read data from file
     //4. register custom fcts
     //5. exec custom agg sum fct 
-    //6. exec opt. custom fct
-    //7. exec builtin agg sum fct 
-    //8. exec custom elem wise sum fct 
-    //9. exec builtin elem wise sum fct
-    //10. create json file of measurements "measurements_<size>_<measures>.json"
+    //6. exec builtin agg sum fct 
+    //7. exec custom elem wise sum fct 
+    //8. exec builtin elem wise sum fct
+    //9. create json file of measurements "measurements_<size>_<measures>.json"
 
     // also measuring time for all tasks
     std::chrono::high_resolution_clock::time_point start; 
-    //func for retrtrieving execution time from start start
+    //func for retrieving execution time from start start
     auto getTime = [&start](){
         auto diff = std::chrono::high_resolution_clock::now() - start;
         //10⁹ ns = 1s
@@ -40,7 +39,7 @@ arrow::Status someTesting(int size,int measures)
     // 1.:
     start = std::chrono::high_resolution_clock::now();
     const int maxValue = 1000;
-    srand(std::chrono::duration_cast<std::chrono::nanoseconds>(start.time_since_epoch()).count());
+    srand(std::chrono::duration_cast<std::chrono::nanoseconds>(start.time_since_epoch()).count());//init rand.
     arrow::Int32Builder i32B;
     //nrOfKilobyte * einzKilobyte / bytePerElement
     for(int i=0; i < size*1024/4; i++){
@@ -53,8 +52,8 @@ arrow::Status someTesting(int size,int measures)
     }
     ARROW_ASSIGN_OR_RAISE(S(arrow::Array,nums),i32B.Finish());
 
-    S(arrow::Field,field_nums) = arrow::field("numbers",arrow::int32()); //create(copy) field via ns function
-    S(arrow::Schema,schema) = arrow::schema({field_nums}); //a date(rec) schema, or: a table entry
+    S(arrow::Field,field_nums) = arrow::field("numbers",arrow::int32());
+    S(arrow::Schema,schema) = arrow::schema({field_nums});
     S(arrow::Table,table) = arrow::Table::Make(schema,{nums});
     std::cout<<"data generation took:"<<getTime()<<"ns"<<std::endl;
     
@@ -78,7 +77,7 @@ arrow::Status someTesting(int size,int measures)
     S(arrow::RecordBatch,recordbatch);
     std::vector<std::shared_ptr<arrow::RecordBatch>> recordbatches;
     for(int i=0; i< ipc_reader->num_record_batches();i++){
-        ARROW_ASSIGN_OR_RAISE(recordbatch, ipc_reader->ReadRecordBatch(0)); //there can be many 
+        ARROW_ASSIGN_OR_RAISE(recordbatch, ipc_reader->ReadRecordBatch(i));
         recordbatches.push_back(recordbatch);
     }
     ARROW_ASSIGN_OR_RAISE(S(arrow::Table,table2),
@@ -89,40 +88,27 @@ arrow::Status someTesting(int size,int measures)
     start = std::chrono::high_resolution_clock::now();
     // - common:
     arrow::compute::InputType input_type(arrow::int32());
-    arrow::compute::OutputType output_type(arrow::int32());
-    U(arrow::compute::FunctionRegistry,funcReg) = arrow::compute::FunctionRegistry::Make(arrow::compute::GetFunctionRegistry());
-    // - unopt.:
+    U(arrow::compute::FunctionRegistry,funcReg) = 
+        arrow::compute::FunctionRegistry::Make(arrow::compute::GetFunctionRegistry());
+    // - custom:
     M(arrow::compute::ScalarAggregateFunction,add_agg_doc,(
         "add_agg",
         arrow::compute::Arity::Unary(),
-        arrow::compute::FunctionDoc("sum custom","custom function simulation aggregate add, unoptimized",{"column"})));
+        arrow::compute::FunctionDoc("add agg custom","custom function simulation aggregate add",{"column"})));
     arrow::compute::ScalarAggregateKernel addAgg({input_type},
-        output_type,
+        arrow::compute::OutputType(arrow::int64()),
         initK<CustomSumKernelState>,
         consumeK<CustomSumKernelState>,
         mergeK<CustomSumKernelState>,
         finalizeK<CustomSumKernelState>,false);
     ARROW_RETURN_NOT_OK(add_agg_doc->AddKernel(addAgg));
     ARROW_RETURN_NOT_OK(funcReg->AddFunction(add_agg_doc));
-    // - opt.:
-    M(arrow::compute::ScalarAggregateFunction,add_agg_o_doc,(
-        "add_agg_o",
-        arrow::compute::Arity::Unary(),
-        arrow::compute::FunctionDoc("add aggregate optimized","custom function simulation aggregate add",{"column"})));
-    arrow::compute::ScalarAggregateKernel addAggO({input_type},
-        output_type,
-        initK<OCustomSumKernelState>,
-        consumeK<OCustomSumKernelState>,
-        mergeK<OCustomSumKernelState>,
-        finalizeK<OCustomSumKernelState>,false);
-    ARROW_RETURN_NOT_OK(add_agg_o_doc->AddKernel(addAggO));
-    ARROW_RETURN_NOT_OK(funcReg->AddFunction(add_agg_o_doc));
     // - elemwise custom:
     M(arrow::compute::ScalarFunction,add_elem_doc,(
         "add_elemwise",
         arrow::compute::Arity::Binary() , 
-        arrow::compute::FunctionDoc("add elementwise","custom function simulating add",{"o1","o2"})));
-    arrow::compute::ScalarKernel addElem({input_type,input_type},output_type,&add1);
+        arrow::compute::FunctionDoc("add elementwise custom","custom function simulating elemwise add",{"o1","o2"})));
+    arrow::compute::ScalarKernel addElem({input_type,input_type},arrow::compute::OutputType(arrow::int32()),&add1);
     ARROW_RETURN_NOT_OK(add_elem_doc->AddKernel(addElem));
     ARROW_RETURN_NOT_OK(funcReg->AddFunction(add_elem_doc));
 
@@ -131,74 +117,50 @@ arrow::Status someTesting(int size,int measures)
     // - calling common:
     arrow::Datum call_res;
     S(arrow::compute::FunctionExecutor,e);
+    S(arrow::ChunkedArray,column) = table2->GetColumnByName("numbers");
     // save measurements
+    //  naming convention: <func><type>
     std::map<std::string, std::vector<int64_t>> ms;
-    std::vector<int64_t>* m;
-
-    // 5.: 
-    ms.insert(std::make_pair<std::string,std::vector<int64_t>>("asc",{}));
-    m = &ms["asc"];//ref
-    for(int i=0; i< measures; i++){
-        ARROW_ASSIGN_OR_RAISE(e,
-            arrow::compute::GetFunctionExecutor("add_agg",{table2->GetColumnByName("numbers")},NULLPTR,funcReg.get()));
-        start = std::chrono::high_resolution_clock::now();
-        ARROW_ASSIGN_OR_RAISE(call_res,
-            e->Execute({table2->GetColumnByName("numbers")}));
-        m->push_back(getTime());
-        std::cout<<"custom sum res: "<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
-        std::cout<<"custom sum exec time: "<<m->back()<<"ns"<<std::endl;
-    }
+    std::vector<arrow::Datum> funcargs;
+    auto measure = [&](std::string name, std::string funcname) {
+        std::vector<int64_t>* m;
+        ms.insert(std::make_pair<std::string,std::vector<int64_t>>(name.c_str(),{})); //aggregate sum custom
+        m = &ms[name];//ref
+        S(arrow::compute::FunctionExecutor,e);
+        for(int i=0; i< measures; i++){
+            //using the macro causes recursion
+            start = std::chrono::high_resolution_clock::now();
+            auto res = arrow::compute::GetFunctionExecutor(
+                funcname,funcargs,NULLPTR,funcReg.get());
+            if(!res.ok()){
+                return arrow::Status::Cancelled("function exec couldnt be created");
+            }
+            e = res.ValueOrDie();
+            
+            auto call_res = e->Execute(funcargs);
+            m->push_back(getTime());
+            if(!call_res.ok()){
+                return arrow::Status::Cancelled("function exec couldnt be exec");
+            }
+            std::cout<<name<<" res: "<<call_res.ValueOrDie().ToString()<<std::endl;
+            std::cout<<name<<" exec time: "<<m->back()<<"ns"<<std::endl;
+        }
+        return arrow::Status::OK();
+    };
+    // 5.:
+    funcargs = {column};
+    ARROW_RETURN_NOT_OK(measure("asc","add_agg"));
     // 6.:
-    ms.insert(std::make_pair<std::string,std::vector<int64_t>>("aso",{}));
-    m = &ms["aso"];
-    for(int i=0; i< measures; i++){
-        ARROW_ASSIGN_OR_RAISE(e,
-            arrow::compute::GetFunctionExecutor("add_agg_o",{table2->GetColumnByName("numbers")},NULLPTR,funcReg.get()));
-        start = std::chrono::high_resolution_clock::now();
-        ARROW_ASSIGN_OR_RAISE(call_res,
-            e->Execute({table2->GetColumnByName("numbers")}));
-        m->push_back(getTime());
-        std::cout<<"opt. custom sum res: "<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
-        std::cout<<"opt. custom sum exec time: "<<m->back()<<"ns"<<std::endl;
-    }
+    ARROW_RETURN_NOT_OK(measure("asb","sum"));
     // 7.:
-    ms.insert(std::make_pair<std::string,std::vector<int64_t>>("asb",{}));
-    m = &ms["asb"];
-    std::cout<<"start measuring"<<std::endl;
-    for(int i=0; i< measures; i++){
-        start = std::chrono::high_resolution_clock::now();
-        ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum",{table2->GetColumnByName("numbers")}));
-        m->push_back(getTime());
-        std::cout<<"built-in sum res: "<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
-        std::cout<<"built-in sum exec time: "<<m->back()<<"ns"<<std::endl;
-    }
+    funcargs = {column,column};
+    ARROW_RETURN_NOT_OK(measure("esc","add_elemwise"));
     // 8.:
-    ms.insert(std::make_pair<std::string,std::vector<int64_t>>("esb",{}));
-    m = &ms["esb"];
-    std::cout<<"start measuring"<<std::endl;
-    for(int i=0; i< measures; i++){
-        start = std::chrono::high_resolution_clock::now();
-        ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("add",{table2->GetColumnByName("numbers"),table2->GetColumnByName("numbers")}));
-        m->push_back(getTime());
-        std::cout<<"built-in elemwise sum res: "<<call_res.chunked_array()->ToString()<<std::endl;
-        std::cout<<"built-in elemwise sum exec time: "<<m->back()<<"ns"<<std::endl;
-    }
-    ms.insert(std::make_pair<std::string,std::vector<int64_t>>("esc",{}));
-    m = &ms["esc"];
-    for(int i=0; i< measures; i++){
-        ARROW_ASSIGN_OR_RAISE(e,
-            arrow::compute::GetFunctionExecutor("add_elemwise",{table2->GetColumnByName("numbers"),table2->GetColumnByName("numbers")},NULLPTR,funcReg.get()));
-        start = std::chrono::high_resolution_clock::now();
-        ARROW_ASSIGN_OR_RAISE(call_res,
-            e->Execute({table2->GetColumnByName("numbers"),table2->GetColumnByName("numbers")}));
-        m->push_back(getTime());
-        std::cout<<"custom elemwise sum res: "<<call_res.chunked_array()->ToString()<<std::endl;
-        std::cout<<"custom elemwise sum exec time: "<<m->back()<<"ns"<<std::endl;
-    }
-    // 10.:
-    // one json file containing array of obj
-    // naming convention: <func><type> 
-    //  e.g. aso (aggregate summation optimized)
+    ARROW_RETURN_NOT_OK(measure("esb","add"));
+
+
+    // 9.:
+    // one json file containing array of obj 
     std::stringstream ss;
     ss<<"./" BUILDDIR "/measurements_"<<size<<"_"<<measures<<".json";
     std::ofstream fileOut(ss.str());

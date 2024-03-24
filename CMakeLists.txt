@@ -5,22 +5,16 @@ project(ArrowTesting)
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0")
 # march tells the compiler to use the native isa of this pcs cpus,
 # which includes using simd extensions e.g. sse 
-# higher optimization level may lead to optimized custom fct
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native")
 set(CMAKE_VERBOSE_MAKEFILE TRUE)
 
 option(BUILD_EVAL "building arrow_eval" OFF)
 
-
-
 if(BUILD_EVAL)
-    add_executable(arrow_eval arrow_eval.cpp) # compile and make exe
-    #link to pkg:
-    # find_package(Arrow REQUIRED)
-    # target_link_libraries(arrow_testing PRIVATE Arrow::arrow_shared)
-    #link to built one, renamed in order to make sure the installed pkgs wont be used 
-    target_link_libraries(arrow_eval -L/home/konst/git/arrow/cpp/build/release)
-    target_link_libraries(arrow_eval -larrow16)
+    add_executable(arrow_eval arrow_eval.cpp)
+    #link to arrow pkg:
+    find_package(Arrow REQUIRED)
+    target_link_libraries(arrow_eval PRIVATE Arrow::arrow_shared)
 else()
     find_package(Arrow REQUIRED)
     find_package(Gandiva REQUIRED)
@@ -32,8 +26,3 @@ else()
     target_link_libraries(arrow_testing PRIVATE ArrowDataset::arrow_dataset_shared) # link found arrow dataset lib
     target_link_libraries(arrow_testing PRIVATE Gandiva::gandiva_shared)
 endif()
-
-
-# inside builddir:
-# cmake .. --preset ninja-release-minimal -DARROW_CXX_FLAGS_RELEASE=-O3 -DARROW_COMPUTE=ON -DCMAKE_INSTALL_PREFIX=/usr/lib/x86_64-linux-gnu
-# cmake --build .

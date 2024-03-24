@@ -28,18 +28,18 @@ arrow::Status GenInitialFile(){
     // build the arrow array
     S(arrow::Array,days);
     ARROW_ASSIGN_OR_RAISE(days,int8builder.Finish()); //get arrow array & reset & return on bad arrow status..
-    // build some more arrays for next concept
+    // build some more arrays
     int8_t months_raw[5] = {11,12,1,2,4};
     ARROW_RETURN_NOT_OK(int8builder.AppendValues(months_raw,5)); //return bad arrow status if adding values did not work
     S(arrow::Array,months);
-    ARROW_ASSIGN_OR_RAISE(months,int8builder.Finish()); //get arrow array & reset & return on bad arrow status..
+    ARROW_ASSIGN_OR_RAISE(months,int8builder.Finish());
     // build some more using diff type
     arrow::Int16Builder int16builder;
     int16_t years_raw[5] = {1911,1932,2011,2032,1999};
     ARROW_RETURN_NOT_OK(int16builder.AppendValues(years_raw,5)); //return bad arrow status if adding values did not work
     S(arrow::Array,years);
-    ARROW_ASSIGN_OR_RAISE(years,int16builder.Finish()); //get arrow array & reset & return on bad arrow status..
-    
+    ARROW_ASSIGN_OR_RAISE(years,int16builder.Finish());
+
     //create a recordbatch
     // create structure
     S(arrow::Field,field_day) = arrow::field("Day",arrow::int8()); //create(copy) field via ns function
@@ -65,25 +65,15 @@ arrow::Status GenInitialFile(){
     int16_t years_raw2[5] = {1999,2000,2001,2003,2004};
     ARROW_RETURN_NOT_OK(int16builder.AppendValues(years_raw2,5));
     ARROW_ASSIGN_OR_RAISE(S(arrow::Array,years2),int16builder.Finish());
-    //std::shared_ptr<arrow::ArrayData> data = std::shared_ptr<arrow::ArrayData>(new arrow::ArrayData); 
-    //int16builder.FinishInternal(&data); //doesnt work
-    S(arrow::Buffer,a) = days2->data()->buffers.at(1);
-    S(arrow::Buffer,b) = years2->data()->buffers.at(1);
-    S(arrow::Buffer,c) = months2->data()->buffers.at(1);
-    //buffer contains the ptr to the allocated mem, so debugging and copying value of data_ should be enough
-    // watch expression: (int)days2->data()->buffers.at(1)->data_ % 64
     
     //manually creating arrays without copying data:
     uint8_t my_data[16]; //theres a required min length
     my_data[0] = 42;my_data[1] = 44;
-    std::vector<std::shared_ptr<arrow::Buffer>> bufs(2);
-    bufs[1] = arrow::Buffer::Wrap<uint8_t>(my_data,16); //TODO: is there a better way to
+    std::vector<std::shared_ptr<arrow::Buffer>> bufs(2); //NOTE: not inc validity buffer
+    bufs[1] = arrow::Buffer::Wrap<uint8_t>(my_data,16); //databuffer
     S(arrow::ArrayData,arraydata) = arrow::ArrayData::Make(arrow::int8(),16,bufs);
-    arrow::NumericArray<arrow::Int8Type> arr(arraydata);
-    std::cout<<arr.ToString()<<std::endl; //TODO: why is idx 3,(some other idx) "105"?
-    // watch expression for check: 
-    // arr.data_.get().buffers.at(1).get().data_
-    // &my_data
+    arrow::NumericArray<arrow::Int8Type> arr(arraydata);//copy for print
+    std::cout<<arr.ToString()<<std::endl; 
 
     //create "placeholder" containers
     arrow::ArrayVector day_vecs{days,days2}; //internal array of array container 
@@ -107,7 +97,11 @@ arrow::Status GenInitialFile(){
     // -> recordbatch has limited rowsize since arraysize limited
     // -> table can be bigger but doesnt guarantee columns in columnar format
     S(arrow::Table,table) = arrow::Table::Make(schema,{day_chunks,month_chunks,year_chunks});
-
+    
+    //reading table entries:
+    S(arrow::ChunkedArray,column) = table->GetColumnByName("Day");
+    ARROW_ASSIGN_OR_RAISE(S(arrow::Scalar,cell), column->GetScalar(7));
+    std::cout<<"8. cell of column 'day': "<<cell->ToString()<<std::endl;
     
     // Write out test files in IPC, CSV, and Parquet for the example to use.
     ARROW_ASSIGN_OR_RAISE(S(arrow::io::FileOutputStream,outfile), arrow::io::FileOutputStream::Open(BUILDDIR "/test_in.arrow"));
@@ -131,14 +125,15 @@ arrow::Status ReadAndWriteStuff()
 {
     ARROW_RETURN_NOT_OK(GenInitialFile());
     
-    //read a (ipc) file
-    // create an object which acts as some kind of container for the opened file & open the file
+    //read a file (feather format)
+    // create an object for file input
     ARROW_ASSIGN_OR_RAISE(S(arrow::io::ReadableFile,inFile), arrow::io::ReadableFile::Open(BUILDDIR "/test_in.arrow",arrow::default_memory_pool()));
-    // use a more concrete reader to read from the container e.g. assume the contents to be recordbatches (tables)
+    // use a more concrete reader to read from the container
+    // feather format is ipc saved as file 
     ARROW_ASSIGN_OR_RAISE(S(arrow::ipc::RecordBatchFileReader,ipc_reader),arrow::ipc::RecordBatchFileReader::Open(inFile));
     // get contents into a recordbatch
     ARROW_ASSIGN_OR_RAISE(S(arrow::RecordBatch,recordbatch), ipc_reader->ReadRecordBatch(0)); //there can be many recordbatches in a file
-    //write a (ipc) file
+    //write a file (feather format)
     // bind the object to the file to be written to
     ARROW_ASSIGN_OR_RAISE(S(arrow::io::FileOutputStream,outFile), arrow::io::FileOutputStream::Open(BUILDDIR "/test_out.arrow"));
     // create an object responsible for writing spec arrow ds
@@ -207,12 +202,14 @@ arrow::Status ComputeStuff()
     S(arrow::Schema,schema) = arrow::schema({field_n1,field_n2});
     S(arrow::Table,table) = arrow::Table::Make(schema,{n1,n2},5);
 
+    //Aggregationen, Element-weise-Funktionen, Array-weise-Funktionen
     //calc sum over an array
     // create result obj
     // very generic object holding every type of result
     arrow::Datum sum_n1;
     // call arrow conv func
     ARROW_ASSIGN_OR_RAISE(sum_n1,arrow::compute::Sum({table->GetColumnByName("n1")}));
+    //ARROW_ASSIGN_OR_RAISE(sum_n1,arrow::compute::CallFunction("sum",{table->GetColumnByName("n1")}));
     // get results
     // print type of result
     std::cout<<"sum_n1 Datum is of kind'"
@@ -259,6 +256,16 @@ arrow::Status ComputeStuff()
     // count distinct:
     ARROW_ASSIGN_OR_RAISE(res,arrow::compute::CallFunction("count_distinct",{table->GetColumnByName("n1")}));
     std::cout<<"amount of distinct numbers in n1:"<<res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
+
+    // min/max:
+    arrow::compute::ScalarAggregateOptions compute_options;
+    compute_options.skip_nulls = false;
+    arrow::Datum compute_res;
+    //  min_max computes both and saves them in an struct with two elements
+    ARROW_ASSIGN_OR_RAISE(compute_res,arrow::compute::CallFunction("min_max",{table->GetColumnByName("n1")},&compute_options));
+    S(arrow::Scalar,min_value) = compute_res.scalar_as<arrow::StructScalar>().value[0];
+    S(arrow::Scalar,max_value) = compute_res.scalar_as<arrow::StructScalar>().value[1];
+
 
     // filter:  
     // - built-in "filter" or "array_filter" can filter elements of a row via array of boolean which might not be the inital idea 
@@ -320,36 +327,40 @@ arrow::Status GandivaStuff(){
     S(gandiva::Node,gNField_n2) = gandiva::TreeExprBuilder::MakeField(field_n2);
     S(gandiva::Node,gNLiteral) = gandiva::TreeExprBuilder::MakeLiteral(2);
     S(arrow::Field,field_res)=arrow::field("result",arrow::int32());
-    S(gandiva::Node,gNAdd) = 
-        gandiva::TreeExprBuilder::MakeFunction("add",{gNField_n2,gNLiteral},arrow::int32());
-    S(gandiva::Expression,gNExpr) =
-        gandiva::TreeExprBuilder::MakeExpression(gNAdd,field_res);
     S(gandiva::Node,gNCond) = 
         gandiva::TreeExprBuilder::MakeFunction("greater_than",{gNField_n2,gNLiteral},arrow::boolean());
-    S(gandiva::Condition,gCond) =
-        gandiva::TreeExprBuilder::MakeCondition(gNCond); //its the good night condition, what else?
+    S(gandiva::Node,gNAdd) = 
+        gandiva::TreeExprBuilder::MakeFunction("add",{gNField_n2,gNLiteral},arrow::int32());
+    //   transformation expr:
+    S(gandiva::Expression,gNTrans) =
+        gandiva::TreeExprBuilder::MakeExpression(gNAdd,field_res);
+    //   selection expr:
+    S(gandiva::Condition,gNSel) =
+        gandiva::TreeExprBuilder::MakeCondition(gNCond);
     // retrieve available function names via gandiva::GetRegisteredFunctionSignatures()
 
     //  2. processors for nodes:
     //   projector: copies data 
     //   filter: saves data refs (as idx-vector)
-    M(arrow::Schema,input_schema,({field_n2}))
-    M(arrow::Schema,output_schema,({field_res}))
+    S(arrow::Schema,input_schema) = arrow::schema({field_n2});
+    S(arrow::Schema,output_schema) = arrow::schema({field_res});
+    
     S(gandiva::Projector,p);
     arrow::Status s;
-    std::vector<std::shared_ptr<gandiva::Expression>> es = {gNExpr};
+    std::vector<std::shared_ptr<gandiva::Expression>> es = {gNTrans};
     s = gandiva::Projector::Make(input_schema,es,&p);
     ARROW_RETURN_NOT_OK(s);
 
     S(gandiva::Filter,f);
-    s = gandiva::Filter::Make(input_schema,gCond, &f);
+    s = gandiva::Filter::Make(input_schema,gNSel, &f);
     ARROW_RETURN_NOT_OK(s);
     //  3. executing projection / filtering
-    S(arrow::RecordBatch,ins) =
+    S(arrow::RecordBatch,input) =
         arrow::RecordBatch::Make(input_schema,n2->length(),{n2});
     arrow::ArrayVector outs;
-    s = p->Evaluate(*ins,arrow::default_memory_pool(),&outs);
+    s = p->Evaluate(*input,arrow::default_memory_pool(),&outs);
     ARROW_RETURN_NOT_OK(s);
+    
     S(arrow::RecordBatch,outs_rb) =
         arrow::RecordBatch::Make(output_schema,outs[0]->length(),outs);
     
@@ -357,25 +368,25 @@ arrow::Status GandivaStuff(){
     // = 3,4,5,6,7
 
     S(gandiva::SelectionVector, res_idxs);
-    s = gandiva::SelectionVector::MakeInt16(ins->num_rows(),arrow::default_memory_pool(),&res_idxs);
+    s = gandiva::SelectionVector::MakeInt16(input->num_rows(),arrow::default_memory_pool(),&res_idxs);
     ARROW_RETURN_NOT_OK(s);
-    s = f->Evaluate(*ins,res_idxs);
+    s = f->Evaluate(*input,res_idxs);
     ARROW_RETURN_NOT_OK(s);
     S(arrow::Array,idxs) = res_idxs->ToArray();
     //  use custom fct to retrieve elements from idxs 
     arrow::Datum bla; ARROW_ASSIGN_OR_RAISE(bla, 
-        arrow::compute::Take(arrow::Datum(ins),arrow::Datum(idxs),arrow::compute::TakeOptions::NoBoundsCheck()));
+        arrow::compute::Take(arrow::Datum(input),arrow::Datum(idxs),arrow::compute::TakeOptions::NoBoundsCheck()));
     outs_rb = bla.record_batch();
     
     std::cout<<" gandiva filtering only returns: "<<std::endl<<outs_rb->ToString()<<std::endl;
     // = 3,4,5
 
-    //  4. chaining the executions (this should be used instead of 3 if sql smth like see beliow)
-    //  select l.n1 + 2 from (select <c> n1 from <table> where <c> > 2) l  
+    //  4. chaining the executions (this should be used instead of 3 if sql smth like see below)
+    //  select l.n1 + 2 from (select <c> as n1 from <table> where <c> > 2) l  
     //   configure projector to take filtered input
     s = gandiva::Projector::Make(input_schema,es,res_idxs->GetMode(),gandiva::ConfigurationBuilder::DefaultConfiguration(),&p);
     ARROW_RETURN_NOT_OK(s);
-    s = p->Evaluate(*ins,res_idxs.get(),arrow::default_memory_pool(),&outs);
+    s = p->Evaluate(*input,res_idxs.get(),arrow::default_memory_pool(),&outs);
     ARROW_RETURN_NOT_OK(s);
     outs_rb = arrow::RecordBatch::Make(output_schema,outs[0]->length(),outs);
 
@@ -530,96 +541,9 @@ arrow::Status CustomCompute()
     S(arrow::Schema,schema) = arrow::schema({field_n1,field_n2});
     S(arrow::Table,table) = arrow::Table::Make(schema,{n1,n2},5);
 
-    //there are fix functions, where can i find them? - in the compute ns arrow::compute::<funcName>
-    //default use case: see ComputeStuff()
-    //functions with options: (corr. option class noted at doc)
-    arrow::compute::ScalarAggregateOptions compute_options;
-    compute_options.skip_nulls = false;
-    arrow::Datum compute_res;
-    // min_max computes both and saves them in an struct with two elements
-    ARROW_ASSIGN_OR_RAISE(compute_res,arrow::compute::CallFunction("min_max",{n1},&compute_options));
-    S(arrow::Scalar,min_value) = compute_res.scalar_as<arrow::StructScalar>().value[0];
-    S(arrow::Scalar,max_value) = compute_res.scalar_as<arrow::StructScalar>().value[1];
-
-    //input value will be casted to common type e.g. (int32 and uint16) -> both int32
-    // if implicit cast not supported: TypeError status
-
-    //aggregate functions
-    // functions which map array to scalar value, e.g.
-    // all: if all bools are true (AND)
-    // any: if one or more bools are true (OR)
-    // count: count entries
-    // count_distinct: count distinct entries
-    // first: get first elem
-    // index: search for value and get idx
-    // product: get product of all elems
-    // min: get min
-    //adding a sql like "group by <x> <y>": via param, use "hash_<aggregateFunc>" instead
-    //element wise functions: non aggregate functions, will interpret input as elem wise
-    // funcvariant with "<fname>_checked" will detect overflow (throws Invalid status)
-    // arithmetic functions, e.g.
-    //  abs: get absolut value
-    //  divide/exp/multiply/negate/sign/sqrt/subtract: do what they say
-    // bit wise funcs: e.g.
-    //  bit_wise_(and|not|or|xor)/shift_(left|right)
-    // rounding functions, e.g.
-    //  ceil/floor/round
-    // logarithmic functions, e.g.
-    //  ln/log10/log2/logb
-    // trigonemetry functions, e.g.
-    //  cos/sin/tan/acos/asin/atan
-    // comparison functions
-    //  append _equal if "or equal" should be added to comp. check, e.g.
-    //  equal/greater/less/not_equal
-    // logic functions, e.g.
-    //  and/and_not/invert/or/xor
-    // string functions
-    //  name like this "(ascii|utf8)_<fname>" expect those with * as start, e.g.
-    //  calc bool:
-    //   is_decimal/is_lower/is_upper/is_digit
-    //   *match_like (true iff theres a match given by options,equival. to sql "like <pattern>" kw)
-    //  calc string or int:
-    //   capitalize/lower/reverse/swapcase/*binary_length/replace_substring
-    //   center/lpad/rpad (append space such that column values are aligned on print)
-    //   *binary_join (second  acts as separator) /*binary_join_elem_wise 
-    //   *binary_slice (get substring from start (including) to end (excl.), negative idx allowed)
-    //   *count_substring (get number of pattern matches given via option)
-    //  calc list of string or struct: (only working with single string input), e.g.
-    //   split_whitespace (get list of substrings) /*extract_regex (get regex matches)
-    // categorisation functions, e.g.
-    //  is_(finite|inf|nan|null|valid) valid = not null
-    // selecting, e.g.
-    //  case_when (?) / choose (?)
-    // transformation, e.g.
-    //  list_value_length / make_struct
-    // conversion, e.g.
-    //  cast (cast given value to type given via option)
-    //  - use case 1: truth extraction: (string|numeric) -> boolean ()
-    //  - use case 2: same value, diff type
-    //  - use case 3: string conversions, e.g. bool -> string
-    //  - use case 4: generic conversion, e.g. struct <x> -> struct <y>
-    // component extraction of specific input types, e.g.
-    //  second/minute/day/hour/month/year (get that component as numeric from date)
-    // difference calc., e.g.
-    //  (days|minutes|..)_between
-    // random number gen.
-    //  random (get list of floats in 0..1; configgure amount via option)
-    // cumulative functions (running results)
-    //  generate an array of intermediate "step results" of the aggregate function
-    //  name like this "cumulative_<agfunc>" where agfunc is an aggregate function
-    //  start value via option
-    // selections, e.g.
-    //  filter/take (filter by condition or select by given idx)
-    // sorting/partitioning, e.g.
-    //  (|array)_sort_indices (get a idx list of a sorted input array or whatever is given, bydefault ascending)
-    //  rank (get list of ranks)
-    // pairwise functions:
-    // functions which operate elem wise in the one input array (hint: fibonacci) 
-    //  pairwise_diff (get "first derivation" points when inputs intepreted as graphpoints)
-    
     //custom compute functions:
     // 1. functions are registered at the arrow::compute::FunctionRegistry
-    // 2. global FunctionRegistry (which will be used when calling fct CallFunction) can be retrieved by calling arrow::compute::GetFunctionRegistry (its also possible to create local fctregistries and use them)
+    // 2. global FunctionRegistry (which will be used when calling fct CallFunction) can be retrieved by calling arrow::compute::GetFunctionRegistry (its also possible to create local fctregistries and use them(however not via CallFunction))
     // 3. FunctionRegistry has a AddFunction() which registers arrow::compute::Function
     // 4. Function has subclass arrow::compute::FunctionImpl,.., arrow::compute::ScalarFunction,arrow::compute::ScalarAggregateFunction,..
     // 5. add implementation to Function subclasses via AddKernel(..) with a corresponding Kernel, e.g. ScalarFunction needs ScalarKernel 
@@ -632,9 +556,10 @@ arrow::Status CustomCompute()
     //  only use them inside this fct
     //  declare common vars:
     arrow::compute::InputType input_type(arrow::int32());
-    arrow::compute::OutputType output_type(arrow::int32());
-    S(arrow::compute::FunctionExecutor,e);
+    S(arrow::compute::FunctionExecutor,exec);
     U(arrow::compute::FunctionRegistry,funcReg) = arrow::compute::FunctionRegistry::Make(arrow::compute::GetFunctionRegistry());
+    S(arrow::ChunkedArray,_n1) = table->GetColumnByName("n1");
+    S(arrow::ChunkedArray,_n2) = table->GetColumnByName("n2");
     arrow::Datum call_res;
     //  1. element wise add:
     //   ScalarKernel takes a fct ptr, fct will be called once containing the columns and expecting the fct to write values back to given param,
@@ -644,24 +569,23 @@ arrow::Status CustomCompute()
         "add_elemwise",
         arrow::compute::Arity::Binary() , 
         arrow::compute::FunctionDoc("add elementwise","custom function simulating add",{"o1","o2"})));
-    arrow::compute::ScalarKernel addElem({input_type,input_type},output_type,&add1);
+    arrow::compute::ScalarKernel addElem({input_type,input_type},
+        arrow::compute::OutputType(arrow::int32()),&add1);
     ARROW_RETURN_NOT_OK(add_elem_doc->AddKernel(addElem));
     ARROW_RETURN_NOT_OK(funcReg->AddFunction(add_elem_doc));
     //   - call stuff:
-    ARROW_ASSIGN_OR_RAISE(e, arrow::compute::GetFunctionExecutor("add_elemwise",{n1,n2},NULLPTR,funcReg.get()));
-    ARROW_ASSIGN_OR_RAISE(call_res,e->Execute({n1,n2}));
-    //ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("add_elemwise",{n1,n2}));
+    ARROW_ASSIGN_OR_RAISE(exec, arrow::compute::GetFunctionExecutor("add_elemwise",{_n1,_n2},NULLPTR,funcReg.get()));
+    ARROW_ASSIGN_OR_RAISE(call_res,exec->Execute({_n1,_n2}));
     std::cout<<"res add_elemwise Datum is of kind '"
         <<call_res.ToString()
         <<"' and type of content '"
         <<call_res.type()->ToString()<<"'"
         <<std::endl;
-    S(arrow::ArrayData,ad) = call_res.array();
-    arrow::NumericArray<arrow::Int32Type> ar(ad);
-    std::cout<<"res custom elem wise add:"<<ar.ToString()<<std::endl;
+    std::cout<<"res custom elem wise add:"<<call_res.chunked_array()->ToString()<<std::endl;
+    
     arrow::Datum call_res_;
     
-    ARROW_ASSIGN_OR_RAISE(call_res_, arrow::compute::CallFunction("add",{table->GetColumnByName("n1"),table->GetColumnByName("n2")}));
+    ARROW_ASSIGN_OR_RAISE(call_res_, arrow::compute::CallFunction("add",{_n1,_n2}));
     std::cout<<"res built-in elem wise add:"<<call_res_.chunked_array()->ToString()<<std::endl;
     //  2. aggregate add:
     //   ScalarAggregateKernel takes 4 fct ptr: init, consume, merge, finalize
@@ -678,9 +602,9 @@ arrow::Status CustomCompute()
     M(arrow::compute::ScalarAggregateFunction,add_agg_doc,(
         "add_agg",
         arrow::compute::Arity::Unary(),
-        arrow::compute::FunctionDoc("add aggregate","custom function simulation aggregate add",{"column"})));
+        arrow::compute::FunctionDoc("add aggregate","custom function simulating aggregate add",{"column"})));
     arrow::compute::ScalarAggregateKernel addAgg({input_type},
-        output_type,
+        arrow::compute::OutputType(arrow::int64()),
         initK<CustomSumKernelState>,
         consumeK<CustomSumKernelState>,
         mergeK<CustomSumKernelState>,
@@ -688,8 +612,8 @@ arrow::Status CustomCompute()
     ARROW_RETURN_NOT_OK(add_agg_doc->AddKernel(addAgg));
     ARROW_RETURN_NOT_OK(funcReg->AddFunction(add_agg_doc));
     //   - call stuff:
-    ARROW_ASSIGN_OR_RAISE(e, arrow::compute::GetFunctionExecutor("add_agg",{n1},NULLPTR,funcReg.get()));
-    ARROW_ASSIGN_OR_RAISE(call_res,e->Execute({n1}));
+    ARROW_ASSIGN_OR_RAISE(exec, arrow::compute::GetFunctionExecutor("add_agg",{_n1},NULLPTR,funcReg.get()));
+    ARROW_ASSIGN_OR_RAISE(call_res,exec->Execute({_n1}));
     //ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("add_agg",{n1}));
     std::cout<<"sum of custom column n1 Datum is of kind'"
         <<call_res.ToString()
@@ -697,14 +621,14 @@ arrow::Status CustomCompute()
         <<call_res.type()->ToString()<<"'"
         <<std::endl;
     std::cout<<"custom sum n1:"<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
-    ARROW_ASSIGN_OR_RAISE(e, arrow::compute::GetFunctionExecutor("add_agg",{n2},NULLPTR,funcReg.get()));
-    ARROW_ASSIGN_OR_RAISE(call_res,e->Execute({n2}));
+    ARROW_ASSIGN_OR_RAISE(exec, arrow::compute::GetFunctionExecutor("add_agg",{_n2},NULLPTR,funcReg.get()));
+    ARROW_ASSIGN_OR_RAISE(call_res,exec->Execute({_n2}));
     //ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("add_agg",{n2}));
     std::cout<<"custom sum n2:"<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
     //   - compare with built in agg sum fct results:
-    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum",{n1}));
+    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum",{_n1}));
     std::cout<<"built-in sum n1:"<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
-    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum",{n2}));
+    ARROW_ASSIGN_OR_RAISE(call_res,arrow::compute::CallFunction("sum",{_n2}));
     std::cout<<"built-in sum n2:"<<call_res.scalar_as<arrow::Int64Scalar>().value<<std::endl;
     
     return arrow::Status::OK();
@@ -713,7 +637,6 @@ arrow::Status CustomCompute()
 arrow::Status RunMain()
 {
     //tutorial stuff
-    ARROW_RETURN_NOT_OK(GenInitialFile());
     ARROW_RETURN_NOT_OK(ReadAndWriteStuff());
     ARROW_RETURN_NOT_OK(ComputeStuff());
     ARROW_RETURN_NOT_OK(GandivaStuff());
